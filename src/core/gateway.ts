@@ -5,6 +5,10 @@ import type {
   ToolCall,
 } from './providers/llm.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
+import {
+  SkillRegistry,
+  type SkillRegistryConfig,
+} from '../skills/skill-registry.js';
 import { loadPersonalityConfig } from './personality.js';
 import { PromptBuilder } from './prompt-builder.js';
 import { Session, type SessionConfig } from './session.js';
@@ -16,6 +20,8 @@ export interface GatewayConfig {
   memoryManager?: MemoryManager;
   memoryManagerConfig?: MemoryManagerConfig;
   promptBuilder?: PromptBuilder;
+  skillRegistry?: SkillRegistry;
+  skillRegistryConfig?: SkillRegistryConfig;
 }
 
 export class Gateway {
@@ -24,6 +30,7 @@ export class Gateway {
   private readonly toolRouter: ToolRouter;
   private readonly memoryManager: MemoryManager;
   private readonly promptBuilder: PromptBuilder;
+  private readonly skillRegistry: SkillRegistry;
 
   public constructor(config: GatewayConfig) {
     this.llmProvider = config.llmProvider;
@@ -40,6 +47,10 @@ export class Gateway {
       new PromptBuilder({
         personality: loadPersonalityConfig(),
       });
+    this.skillRegistry =
+      config.skillRegistry ??
+      new SkillRegistry(config.skillRegistryConfig);
+    this.skillRegistry.attachToRouter(this.toolRouter);
   }
 
   public get tools(): ToolRouter {
@@ -48,6 +59,10 @@ export class Gateway {
 
   public get currentSession(): Session {
     return this.session;
+  }
+
+  public get skills(): SkillRegistry {
+    return this.skillRegistry;
   }
 
   public async chat(userMessage: string): Promise<string> {
