@@ -7,6 +7,10 @@ import {
   type MemoryExtraction,
   type MemoryExtractorConfig,
 } from './memory-extractor.js';
+import {
+  MemoryInjector,
+  type MemoryInjectorConfig,
+} from './memory-injector.js';
 import { RecentMemory, type RecentMemoryConfig } from './recent-memory.js';
 
 export interface MemoryManagerConfig {
@@ -14,15 +18,18 @@ export interface MemoryManagerConfig {
   memoryStore?: MemoryStore;
   recentMemory?: RecentMemory;
   memoryExtractor?: MemoryExtractor;
+  memoryInjector?: MemoryInjector;
   memoryStoreConfig?: MemoryStoreConfig;
   recentMemoryConfig?: RecentMemoryConfig;
   memoryExtractorConfig?: Omit<MemoryExtractorConfig, 'llmProvider' | 'memoryStore'>;
+  memoryInjectorConfig?: Omit<MemoryInjectorConfig, 'memoryStore' | 'recentMemory'>;
 }
 
 export class MemoryManager {
   private readonly memoryStore: MemoryStore;
   private readonly recentMemory: RecentMemory;
   private readonly memoryExtractor?: MemoryExtractor;
+  private readonly memoryInjector: MemoryInjector;
 
   public constructor(config: MemoryManagerConfig = {}) {
     this.memoryStore =
@@ -38,6 +45,13 @@ export class MemoryManager {
             memoryStore: this.memoryStore,
             ...config.memoryExtractorConfig,
           }));
+    this.memoryInjector =
+      config.memoryInjector ??
+      new MemoryInjector({
+        memoryStore: this.memoryStore,
+        recentMemory: this.recentMemory,
+        ...config.memoryInjectorConfig,
+      });
   }
 
   public get store(): MemoryStore {
@@ -73,6 +87,13 @@ export class MemoryManager {
     }
 
     return this.memoryExtractor.summarizeAndStore(messages);
+  }
+
+  public async buildSystemPrompt(
+    baseSystemPrompt: string,
+    userMessage: string,
+  ): Promise<string> {
+    return this.memoryInjector.composeSystemPrompt(baseSystemPrompt, userMessage);
   }
 
   public close(): void {

@@ -42,6 +42,10 @@ export class Gateway {
   }
 
   public async chat(userMessage: string): Promise<string> {
+    const systemPrompt = await this.memoryManager.buildSystemPrompt(
+      this.session.getSystemPrompt(),
+      userMessage,
+    );
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -50,8 +54,9 @@ export class Gateway {
     this.session.addMessage(userEntry);
     await this.memoryManager.recordMessage(this.session.id, userEntry);
 
-    let response = await this.llmProvider.generate(this.session.getMessages(), {
+    let response = await this.llmProvider.generate(this.session.getHistory(), {
       tools: this.toolRouter.getDefinitions(),
+      systemPrompt,
     });
 
     while (this.hasToolCalls(response)) {
@@ -59,8 +64,9 @@ export class Gateway {
       await this.memoryManager.recordMessage(this.session.id, response);
       await this.executeToolCalls(response.toolCalls);
 
-      response = await this.llmProvider.generate(this.session.getMessages(), {
+      response = await this.llmProvider.generate(this.session.getHistory(), {
         tools: this.toolRouter.getDefinitions(),
+        systemPrompt,
       });
     }
 
@@ -73,6 +79,10 @@ export class Gateway {
   public async *streamChat(
     userMessage: string,
   ): AsyncIterable<LlmStreamChunk> {
+    const systemPrompt = await this.memoryManager.buildSystemPrompt(
+      this.session.getSystemPrompt(),
+      userMessage,
+    );
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -83,8 +93,9 @@ export class Gateway {
 
     let assistantContent = '';
 
-    for await (const chunk of this.llmProvider.stream(this.session.getMessages(), {
+    for await (const chunk of this.llmProvider.stream(this.session.getHistory(), {
       tools: this.toolRouter.getDefinitions(),
+      systemPrompt,
     })) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
         assistantContent += chunk.text;
