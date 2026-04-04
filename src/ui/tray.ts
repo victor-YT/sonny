@@ -42,6 +42,7 @@ export class TrayController {
   private readonly tooltip: string;
   private tray: Tray | undefined;
   private status: TrayStatus = 'idle';
+  private badge = '';
 
   public constructor(config: TrayControllerConfig = {}) {
     this.tooltip = config.tooltip ?? 'Sonny';
@@ -72,6 +73,16 @@ export class TrayController {
     return this.status;
   }
 
+  public setBadge(label?: string): void {
+    this.badge = label?.trim() ?? '';
+
+    if (this.tray === undefined) {
+      return;
+    }
+
+    this.applyBadge();
+  }
+
   private applyStatus(status: TrayStatus): void {
     if (this.tray === undefined) {
       return;
@@ -80,6 +91,15 @@ export class TrayController {
     const style = STATUS_STYLES[status];
     this.tray.setImage(this.createImage(status));
     this.tray.setToolTip(`${this.tooltip} · ${style.label}`);
+    this.applyBadge();
+  }
+
+  private applyBadge(): void {
+    if (this.tray === undefined) {
+      return;
+    }
+
+    this.tray.setTitle(this.badge);
   }
 
   private createImage(status: TrayStatus): NativeImage {
