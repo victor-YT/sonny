@@ -121,25 +121,33 @@ export function readVoiceEnvironmentConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): VoiceEnvironmentConfig {
   const porcupineAccessKey =
-    environment.SONNY_PORCUPINE_ACCESS_KEY ??
-    environment.PORCUPINE_ACCESS_KEY;
+    environment.PORCUPINE_ACCESS_KEY ??
+    environment.SONNY_PORCUPINE_ACCESS_KEY;
 
   if (porcupineAccessKey === undefined || porcupineAccessKey.length === 0) {
     throw new Error(
-      'Voice mode requires SONNY_PORCUPINE_ACCESS_KEY or PORCUPINE_ACCESS_KEY.',
+      'Voice mode requires PORCUPINE_ACCESS_KEY or SONNY_PORCUPINE_ACCESS_KEY.',
     );
   }
 
   return {
-    ollamaBaseUrl: environment.SONNY_OLLAMA_BASE_URL,
-    ollamaModel: environment.SONNY_OLLAMA_MODEL,
+    ollamaBaseUrl:
+      environment.OLLAMA_BASE_URL ??
+      environment.SONNY_OLLAMA_BASE_URL,
+    ollamaModel:
+      environment.OLLAMA_MODEL ??
+      environment.SONNY_OLLAMA_MODEL,
     porcupineAccessKey,
     wakeWords: parseWakeWords(environment.SONNY_WAKE_WORDS),
     porcupineModelPath: environment.SONNY_PORCUPINE_MODEL_PATH,
     wakeWordSensitivity: parseOptionalNumber(environment.SONNY_WAKE_WORD_SENSITIVITY),
     audioDeviceIndex: parseOptionalInteger(environment.SONNY_AUDIO_DEVICE_INDEX),
-    sttBaseUrl: environment.SONNY_STT_BASE_URL,
-    ttsBaseUrl: environment.SONNY_TTS_BASE_URL,
+    sttBaseUrl:
+      environment.FASTER_WHISPER_URL ??
+      environment.SONNY_STT_BASE_URL,
+    ttsBaseUrl:
+      environment.CHATTERBOX_URL ??
+      environment.SONNY_TTS_BASE_URL,
     sttLanguage: environment.SONNY_STT_LANGUAGE,
     ttsVoice: environment.SONNY_TTS_VOICE,
     micSampleRateHertz: parseOptionalInteger(environment.SONNY_MIC_SAMPLE_RATE_HERTZ),

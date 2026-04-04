@@ -2,11 +2,18 @@ import { once } from 'node:events';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
+import { loadConfig, type RuntimeConfig } from './core/config.js';
 import { Gateway } from './core/gateway.js';
-import { OllamaProvider } from './core/providers/ollama.js';
+import { MonitorScheduler } from './core/monitor-scheduler.js';
+import { ProactiveAgent } from './core/proactive-agent.js';
+import {
+  loadStartupEnvironment,
+  type StartupEnvironment,
+} from './core/startup-check.js';
+import { MonitorRegistry } from './skills/monitor-registry.js';
+import { WebMonitor } from './skills/web-monitor.js';
 import {
   createVoiceGatewayFromEnvironment,
-  readVoiceEnvironmentConfig,
 } from './voice/voice-gateway.js';
 
 const SYSTEM_PROMPT =
@@ -20,27 +27,48 @@ function toErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
-function isVoiceModeEnabled(): boolean {
-  const flag = process.env.SONNY_VOICE_MODE;
-
-  return flag === '1' || flag === 'true';
-}
-
-function createGateway(): Gateway {
-  const voiceEnvironment = isVoiceModeEnabled()
-    ? readVoiceEnvironmentConfig(process.env)
-    : undefined;
-  const provider = new OllamaProvider({
-    baseUrl: voiceEnvironment?.ollamaBaseUrl,
-    model: voiceEnvironment?.ollamaModel,
-  });
-
+function createGateway(
+  runtimeConfig: RuntimeConfig,
+  startupEnvironment: StartupEnvironment,
+): Gateway {
   return new Gateway({
-    llmProvider: provider,
+    runtimeConfig: {
+      ...runtimeConfig,
+      ollama: {
+        baseUrl: startupEnvironment.ollamaBaseUrl,
+        model: startupEnvironment.ollamaModel,
+      },
+    },
     sessionConfig: {
       systemPrompt: SYSTEM_PROMPT,
     },
   });
+}
+
+function createMonitoringRuntime(): {
+  proactiveAgent: ProactiveAgent;
+  scheduler: MonitorScheduler;
+} {
+  const monitorRegistry = new MonitorRegistry();
+  const proactiveAgent = new ProactiveAgent();
+  const webMonitor = new WebMonitor({
+    monitorRegistry,
+    proactiveAgent,
+  });
+  const scheduler = new MonitorScheduler({
+    monitorRegistry,
+    webMonitor,
+    onError: (error, monitor) => {
+      console.error(
+        `Monitor check failed for ${monitor.id}: ${toErrorMessage(error)}`,
+      );
+    },
+  });
+
+  return {
+    proactiveAgent,
+    scheduler,
+  };
 }
 
 async function runVoice(gateway: Gateway): Promise<void> {
@@ -83,12 +111,20 @@ async function runVoice(gateway: Gateway): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const gateway = createGateway();
+  const startupEnvironment = loadStartupEnvironment(process.env);
+  const runtimeConfig = loadConfig();
+  const gateway = createGateway(runtimeConfig, startupEnvironment);
+  const monitoringRuntime = createMonitoringRuntime();
 
-  if (isVoiceModeEnabled()) {
+  monitoringRuntime.scheduler.start();
+
+  if (startupEnvironment.voiceMode) {
     try {
       await runVoice(gateway);
     } finally {
+      monitoringRuntime.scheduler.stop();
+      await monitoringRuntime.proactiveAgent.stop();
+
       try {
         await gateway.finalizeSession();
       } catch (error: unknown) {
@@ -147,6 +183,9 @@ async function main(): Promise<void> {
       }
     }
   } finally {
+    monitoringRuntime.scheduler.stop();
+    await monitoringRuntime.proactiveAgent.stop();
+
     try {
       await gateway.finalizeSession();
     } catch (error: unknown) {
