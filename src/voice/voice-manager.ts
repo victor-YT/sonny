@@ -31,7 +31,9 @@ export type VoiceManagerEventType =
   | 'error';
 
 export interface VoiceCaptureResult {
-  audio: Buffer;
+  audio?: Buffer;
+  audioPromise?: Promise<Buffer>;
+  audioStream?: AsyncIterable<Buffer>;
   sttOptions?: SttOptions;
 }
 
@@ -172,11 +174,18 @@ export class VoiceManager {
     audio: Buffer,
     options: VoiceInteractionOptions = {},
   ): Promise<VoiceInteractionResult> {
+    return this.processCaptureResult({ audio }, options);
+  }
+
+  private async processCaptureResult(
+    capture: VoiceCaptureResult,
+    options: VoiceInteractionOptions,
+  ): Promise<VoiceInteractionResult> {
     if (this.pipelineTask !== undefined) {
       throw new Error('Voice pipeline is already processing another request');
     }
 
-    const task = this.runPipeline(audio, options);
+    const task = this.runPipeline(capture, options);
     this.pipelineTask = task;
 
     try {
@@ -211,12 +220,12 @@ export class VoiceManager {
   }
 
   private async runPipeline(
-    audio: Buffer,
+    capture: VoiceCaptureResult,
     options: VoiceInteractionOptions,
   ): Promise<VoiceInteractionResult> {
     try {
       this.setState('transcribing');
-      const sttResult = await this.sttProvider.transcribe(audio, {
+      const sttResult = await this.transcribeCapture(capture, {
         ...this.defaultSttOptions,
         ...options.stt,
       });
@@ -294,7 +303,7 @@ export class VoiceManager {
       const captureResult = await this.captureAudio(event);
       const normalized = this.normalizeCaptureResult(captureResult);
 
-      await this.processAudio(normalized.audio, {
+      await this.processCaptureResult(normalized, {
         wakeWord: event.keyword,
         stt: normalized.sttOptions,
       });
@@ -311,6 +320,45 @@ export class VoiceManager {
     }
 
     return result;
+  }
+
+  private async transcribeCapture(
+    capture: VoiceCaptureResult,
+    options: SttOptions,
+  ): Promise<SttResult> {
+    if (
+      capture.audioStream !== undefined &&
+      this.sttProvider.supportsStreaming &&
+      this.sttProvider.streamTranscribe !== undefined
+    ) {
+      let latestResult: SttResult | undefined;
+
+      for await (const result of this.sttProvider.streamTranscribe(
+        capture.audioStream,
+      )) {
+        latestResult = result;
+      }
+
+      if (latestResult !== undefined) {
+        return latestResult;
+      }
+    }
+
+    const audio = await this.resolveCapturedAudio(capture);
+
+    return this.sttProvider.transcribe(audio, options);
+  }
+
+  private async resolveCapturedAudio(capture: VoiceCaptureResult): Promise<Buffer> {
+    if (capture.audio !== undefined) {
+      return capture.audio;
+    }
+
+    if (capture.audioPromise !== undefined) {
+      return capture.audioPromise;
+    }
+
+    throw new Error('Voice capture did not provide any audio to transcribe');
   }
 
   private async synthesizeForPlayback(
