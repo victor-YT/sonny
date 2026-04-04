@@ -13,6 +13,7 @@ import {
 } from './permissions.js';
 import { SandboxSkill } from './sandbox.js';
 import { ShellToolSkill, type ShellToolSkillConfig } from './shell-tool.js';
+import { SkillLoader } from './skill-loader.js';
 import { WebSearchSkill } from './web-search.js';
 
 const PERMISSION_ORDER: Record<PermissionLevel, number> = {
@@ -34,6 +35,9 @@ export interface SkillRegistryConfig {
   fileTool?: Omit<FileToolSkillConfig, 'allowedPaths' | 'baseDirectory'>;
   shellTool?: Omit<ShellToolSkillConfig, 'allowedPaths' | 'baseDirectory'>;
   skills?: BuiltInSkill[];
+  skillLoader?: SkillLoader;
+  communitySkillsDirectory?: string;
+  loadCommunitySkills?: boolean;
 }
 
 export interface SkillSummary {
@@ -44,6 +48,8 @@ export interface SkillSummary {
 export class SkillRegistry {
   private readonly skills: Map<string, BuiltInSkill>;
   private readonly permissions: Record<string, SkillPermissionConfig>;
+  private readonly attachedRouters = new Set<ToolRouter>();
+  private readonly ready: Promise<void>;
 
   public constructor(config: SkillRegistryConfig = {}) {
     this.skills = new Map<string, BuiltInSkill>();
@@ -52,15 +58,21 @@ export class SkillRegistry {
       config.runtimeConfig?.skills.permissions ??
       {};
 
-    const skills = config.skills ?? this.createDefaultSkills(config);
+    const skills = this.createInitialSkills(config);
 
     for (const skill of skills) {
       this.register(skill);
     }
+
+    this.ready = this.loadCommunitySkills(config);
   }
 
   public register(skill: BuiltInSkill): void {
     this.skills.set(skill.definition.name, skill);
+
+    for (const router of this.attachedRouters) {
+      router.register(skill.definition, (args) => this.executeSkill(skill, args));
+    }
   }
 
   public unregister(name: string): boolean {
@@ -86,7 +98,13 @@ export class SkillRegistry {
     return Array.from(this.skills.values(), (skill) => skill.definition);
   }
 
+  public whenReady(): Promise<void> {
+    return this.ready;
+  }
+
   public attachToRouter(toolRouter: ToolRouter): void {
+    this.attachedRouters.add(toolRouter);
+
     for (const skill of this.skills.values()) {
       toolRouter.register(skill.definition, (args) => this.executeSkill(skill, args));
     }
@@ -160,6 +178,13 @@ export class SkillRegistry {
     return permissionConfig.defaultLevel;
   }
 
+  private createInitialSkills(config: SkillRegistryConfig): BuiltInSkill[] {
+    return [
+      ...this.createDefaultSkills(config),
+      ...(config.skills ?? []),
+    ];
+  }
+
   private createDefaultSkills(config: SkillRegistryConfig): BuiltInSkill[] {
     const baseDirectory = config.baseDirectory ?? process.cwd();
     const allowedPaths = config.allowedPaths ?? [baseDirectory];
@@ -178,5 +203,44 @@ export class SkillRegistry {
         allowedPaths,
       }),
     ];
+  }
+
+  private async loadCommunitySkills(
+    config: SkillRegistryConfig,
+  ): Promise<void> {
+    if (config.loadCommunitySkills === false) {
+      return;
+    }
+
+    const loader = config.skillLoader ?? new SkillLoader({
+      skillsDirectory: config.communitySkillsDirectory,
+    });
+
+    try {
+      const skills = await loader.loadSkills();
+
+      for (const skill of skills) {
+        if (this.skills.has(skill.definition.name)) {
+          console.warn(
+            `Skipping community skill ${skill.definition.name} because a skill with that name is already registered.`,
+          );
+          continue;
+        }
+
+        this.register(skill);
+      }
+    } catch (error: unknown) {
+      console.warn(
+        `Failed to load community skills from ${loader.directory}: ${this.toErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Unknown error';
   }
 }
