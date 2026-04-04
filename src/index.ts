@@ -5,7 +5,8 @@ import { stdin, stdout } from 'node:process';
 import { loadConfig, type RuntimeConfig } from './core/config.js';
 import { Gateway } from './core/gateway.js';
 import { MonitorScheduler } from './core/monitor-scheduler.js';
-import { ProactiveAgent } from './core/proactive-agent.js';
+import { NotificationManager } from './core/notification-manager.js';
+import { Notifier } from './core/notifier.js';
 import {
   loadStartupEnvironment,
   type StartupEnvironment,
@@ -14,7 +15,9 @@ import { MonitorRegistry } from './skills/monitor-registry.js';
 import { WebMonitor } from './skills/web-monitor.js';
 import {
   createVoiceGatewayFromEnvironment,
+  type VoiceGateway,
 } from './voice/voice-gateway.js';
+import type { VoiceManager } from './voice/voice-manager.js';
 import { startConsoleServer } from './ui/console/server.js';
 
 const SYSTEM_PROMPT =
@@ -46,15 +49,21 @@ function createGateway(
   });
 }
 
-function createMonitoringRuntime(): {
-  proactiveAgent: ProactiveAgent;
+function createMonitoringRuntime(
+  voiceManager?: Pick<VoiceManager, 'currentState' | 'isRunning' | 'speak'>,
+): {
   scheduler: MonitorScheduler;
 } {
   const monitorRegistry = new MonitorRegistry();
-  const proactiveAgent = new ProactiveAgent();
+  const notificationManager = new NotificationManager({
+    notifier: new Notifier({
+      voiceManager,
+    }),
+    voiceManager,
+  });
   const webMonitor = new WebMonitor({
     monitorRegistry,
-    proactiveAgent,
+    notificationManager,
   });
   const scheduler = new MonitorScheduler({
     monitorRegistry,
@@ -67,14 +76,11 @@ function createMonitoringRuntime(): {
   });
 
   return {
-    proactiveAgent,
     scheduler,
   };
 }
 
-async function runVoice(gateway: Gateway): Promise<void> {
-  const voiceGateway = createVoiceGatewayFromEnvironment(gateway, process.env);
-
+async function runVoice(voiceGateway: VoiceGateway): Promise<void> {
   voiceGateway.manager.onEvent((event) => {
     if (event.type === 'state_changed' && event.state !== undefined) {
       stdout.write(`[voice] state=${event.state}\n`);
@@ -115,7 +121,10 @@ async function main(): Promise<void> {
   const startupEnvironment = loadStartupEnvironment(process.env);
   const runtimeConfig = loadConfig();
   const gateway = createGateway(runtimeConfig, startupEnvironment);
-  const monitoringRuntime = createMonitoringRuntime();
+  const voiceGateway = startupEnvironment.voiceMode
+    ? createVoiceGatewayFromEnvironment(gateway, process.env)
+    : undefined;
+  const monitoringRuntime = createMonitoringRuntime(voiceGateway?.manager);
   const consoleServer = await startConsoleServer({
     gateway,
   });
@@ -125,11 +134,14 @@ async function main(): Promise<void> {
   monitoringRuntime.scheduler.start();
 
   if (startupEnvironment.voiceMode) {
+    if (voiceGateway === undefined) {
+      throw new Error('Voice gateway is required when voice mode is enabled');
+    }
+
     try {
-      await runVoice(gateway);
+      await runVoice(voiceGateway);
     } finally {
       monitoringRuntime.scheduler.stop();
-      await monitoringRuntime.proactiveAgent.stop();
       await consoleServer.stop();
 
       try {
@@ -191,7 +203,6 @@ async function main(): Promise<void> {
     }
   } finally {
     monitoringRuntime.scheduler.stop();
-    await monitoringRuntime.proactiveAgent.stop();
     await consoleServer.stop();
 
     try {
