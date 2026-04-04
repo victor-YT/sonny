@@ -104,11 +104,18 @@ export class ConsoleServer {
     this.app.use(express.json());
     this.app.use('/api', this.apiRuntime.router);
 
+    const indexPath = join(this.publicDirectory, 'index.html');
+
     if (existsSync(this.publicDirectory)) {
       this.app.use(express.static(this.publicDirectory));
     }
 
     this.app.get('/', (_request, response) => {
+      if (existsSync(indexPath)) {
+        response.sendFile(indexPath);
+        return;
+      }
+
       response.type('text/plain').send('Sonny console server is running.');
     });
   }
