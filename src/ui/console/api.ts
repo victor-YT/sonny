@@ -111,6 +111,13 @@ export function createConsoleApiRuntime(
       ]);
       const recentMessages = recentMemory.listMessages({ limit: 10 });
       const skills = config.gateway?.skills.list() ?? [];
+      const provider = getGatewayProvider(config.gateway);
+      const providerName =
+        config.llmProviderName ?? readStringProperty(provider, 'name');
+      const currentModel =
+        config.currentModel ??
+        readStringProperty(provider, 'currentModel') ??
+        readStringProperty(provider, 'model');
 
       response.json({
         checkedAt: new Date().toISOString(),
@@ -118,8 +125,8 @@ export function createConsoleApiRuntime(
           healthy: config.gateway !== undefined,
           sessionId: config.gateway?.currentSession.id ?? null,
           messageCount: config.gateway?.currentSession.messageCount ?? 0,
-          provider: config.llmProviderName ?? null,
-          model: config.currentModel ?? null,
+          provider: providerName,
+          model: currentModel,
         },
         voice: {
           attached: config.voiceManager !== undefined,
@@ -243,6 +250,31 @@ function parseConversationLimit(value: unknown): number {
   }
 
   return parsed;
+}
+
+function getGatewayProvider(gateway: Gateway | undefined): unknown {
+  if (gateway === undefined) {
+    return undefined;
+  }
+
+  return Reflect.get(gateway as object, 'llmProvider');
+}
+
+function readStringProperty(
+  value: unknown,
+  propertyName: string,
+): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const property = value[propertyName];
+
+  if (typeof property !== 'string' || property.length === 0) {
+    return null;
+  }
+
+  return property;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
