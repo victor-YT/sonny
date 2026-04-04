@@ -13,7 +13,6 @@ import type {
 import {
   ResponseProcessor,
   type ProcessedVoiceResponse,
-  type ProcessedVoiceSentence,
 } from './response-processor.js';
 import type { Speaker, SpeakerListener } from './speaker.js';
 import {
@@ -490,7 +489,7 @@ export class VoiceManager {
 
   private getPlayableSentences(
     response: ProcessedVoiceResponse,
-  ): ProcessedVoiceSentence[] {
+  ): ProcessedVoiceResponse['sentences'] {
     if (response.sentences.length > 0) {
       return response.sentences;
     }
@@ -510,7 +509,7 @@ export class VoiceManager {
   }
 
   private async synthesizeSentenceForPlayback(
-    sentence: ProcessedVoiceSentence,
+    sentence: ProcessedVoiceResponse['sentences'][number],
     options: TtsOptions,
   ): Promise<Buffer> {
     if (
