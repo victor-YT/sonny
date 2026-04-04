@@ -8,6 +8,8 @@ const elements = {
   refreshButton: document.querySelector('#refresh-button'),
   statusUpdated: document.querySelector('#status-updated'),
   statusGateway: document.querySelector('#status-gateway'),
+  statusProvider: document.querySelector('#status-provider'),
+  statusModel: document.querySelector('#status-model'),
   statusVoice: document.querySelector('#status-voice'),
   statusMemoryCount: document.querySelector('#status-memory-count'),
   statusConversationCount: document.querySelector('#status-conversation-count'),
@@ -36,6 +38,8 @@ const connectionStatus = assertElement(elements.connectionStatus, 'connection-st
 const refreshButton = assertElement(elements.refreshButton, 'refresh-button');
 const statusUpdated = assertElement(elements.statusUpdated, 'status-updated');
 const statusGateway = assertElement(elements.statusGateway, 'status-gateway');
+const statusProvider = assertElement(elements.statusProvider, 'status-provider');
+const statusModel = assertElement(elements.statusModel, 'status-model');
 const statusVoice = assertElement(elements.statusVoice, 'status-voice');
 const statusMemoryCount = assertElement(elements.statusMemoryCount, 'status-memory-count');
 const statusConversationCount = assertElement(
@@ -98,7 +102,7 @@ async function refreshDashboard() {
     renderStatus(statusPayload);
     renderMemoryDocuments(memoryPayload.documents);
     renderConversations(conversationsPayload.messages);
-    renderSkills(skillsPayload.directory, skillsPayload.skills);
+    renderSkills(skillsPayload.skills);
     setConnectionState('Connected', true);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -112,9 +116,11 @@ async function refreshDashboard() {
 
 function renderStatus(payload) {
   statusUpdated.textContent = formatTimestamp(payload.checkedAt);
-  statusGateway.textContent = payload.gateway.attached
-    ? `Attached (${payload.gateway.messageCount} messages)`
-    : 'Detached';
+  statusGateway.textContent = payload.gateway.healthy
+    ? `Healthy (${payload.gateway.messageCount} messages)`
+    : 'Unavailable';
+  statusProvider.textContent = payload.gateway.provider ?? 'Unknown';
+  statusModel.textContent = payload.gateway.model ?? 'Unknown';
   statusVoice.textContent = payload.voice.attached
     ? `${payload.voice.state} (${payload.voice.running ? 'running' : 'stopped'})`
     : 'Detached';
@@ -122,7 +128,9 @@ function renderStatus(payload) {
   statusConversationCount.textContent = String(payload.conversations.recentCount);
   statusSkillCount.textContent = String(payload.skills.count);
   statusMemoryDirectory.textContent = payload.memory.directory;
-  skillsDirectory.textContent = payload.skills.directory;
+  skillsDirectory.textContent = payload.skills.attached
+    ? `${payload.skills.count} registered`
+    : 'Gateway not attached';
 }
 
 function renderMemoryDocuments(documents) {
@@ -202,11 +210,9 @@ function renderConversations(messages) {
   );
 }
 
-function renderSkills(directory, skills) {
-  skillsDirectory.textContent = directory;
-
+function renderSkills(skills) {
   if (skills.length === 0) {
-    renderEmptyState(skillsList, 'No installed skill modules were discovered.');
+    renderEmptyState(skillsList, 'No registered skills were reported by the gateway.');
     return;
   }
 
@@ -218,11 +224,11 @@ function renderSkills(directory, skills) {
       const title = document.createElement('strong');
       title.textContent = skill.name;
 
-      const meta = document.createElement('p');
-      meta.className = 'meta';
-      meta.textContent = `${skill.implemented ? 'Implemented' : 'Stub'} · ${skill.path}`;
+      const body = document.createElement('p');
+      body.className = 'meta';
+      body.textContent = skill.description;
 
-      item.append(title, meta);
+      item.append(title, body);
       return item;
     }),
   );
@@ -251,13 +257,12 @@ async function saveMemoryDocument() {
   memorySaveButton.textContent = 'Saving';
 
   try {
-    const payload = await requestJson('/api/memory', {
+    const payload = await requestJson(`/api/memory/${encodeURIComponent(name)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        name,
         content: memoryEditor.value,
       }),
     });
@@ -303,9 +308,9 @@ function formatTimestamp(value) {
 function setConnectionState(label, connected) {
   connectionStatus.textContent = label;
   connectionStatus.style.background = connected
-    ? 'rgba(47, 107, 79, 0.12)'
-    : 'rgba(184, 92, 56, 0.14)';
-  connectionStatus.style.color = connected ? '#2f6b4f' : '#8f4022';
+    ? 'rgba(77, 224, 168, 0.12)'
+    : 'rgba(255, 106, 106, 0.14)';
+  connectionStatus.style.color = connected ? '#4de0a8' : '#ff8d8d';
 }
 
 function handleActionError(error) {
