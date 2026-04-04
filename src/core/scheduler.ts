@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 export interface ScheduledTaskDefinition {
   id: string;
   schedule: string;
@@ -43,6 +46,7 @@ interface CronExpression {
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 30_000;
+const DEFAULT_SCHEDULES_PATH = join(process.cwd(), 'data', 'schedules.json');
 const MINUTE_ALIASES = new Map<string, number>();
 const HOUR_ALIASES = new Map<string, number>();
 const MONTH_ALIASES = new Map<string, number>([
@@ -178,6 +182,56 @@ export class Scheduler {
       listener(event);
     }
   }
+}
+
+export function loadScheduledTasks(
+  filePath: string = DEFAULT_SCHEDULES_PATH,
+): ScheduledTaskDefinition[] {
+  if (!existsSync(filePath)) {
+    return [];
+  }
+
+  let content: string;
+
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch (error: unknown) {
+    throw new Error(
+      `Failed to read scheduled tasks at "${filePath}": ${toErrorMessage(error)}`,
+    );
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch (error: unknown) {
+    throw new Error(
+      `Failed to parse scheduled tasks at "${filePath}": ${toErrorMessage(error)}`,
+    );
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error(`Scheduled tasks at "${filePath}" must be a JSON object`);
+  }
+
+  const tasks = parsed.tasks;
+
+  if (tasks === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(tasks)) {
+    throw new Error(
+      `Scheduled tasks at "${filePath}" must define "tasks" as an array`,
+    );
+  }
+
+  return tasks.map((task, index) => parseScheduledTask(task, filePath, index));
+}
+
+export function getDefaultSchedulesPath(): string {
+  return DEFAULT_SCHEDULES_PATH;
 }
 
 function normalizeTask(definition: ScheduledTaskDefinition): ScheduledTask {
@@ -403,4 +457,99 @@ function truncateToMinute(value: Date): Date {
   const truncated = new Date(value);
   truncated.setSeconds(0, 0);
   return truncated;
+}
+
+function parseScheduledTask(
+  value: unknown,
+  filePath: string,
+  index: number,
+): ScheduledTaskDefinition {
+  if (!isRecord(value)) {
+    throw new Error(`Scheduled task at index ${index} in "${filePath}" must be an object`);
+  }
+
+  const metadata = value.metadata;
+
+  return normalizeTask({
+    id: parseRequiredString(value.id, `tasks[${index}].id`),
+    schedule: parseRequiredString(value.schedule, `tasks[${index}].schedule`),
+    prompt: parseRequiredString(value.prompt, `tasks[${index}].prompt`),
+    title: parseOptionalString(value.title, `tasks[${index}].title`),
+    enabled: parseOptionalBoolean(value.enabled, `tasks[${index}].enabled`) ?? true,
+    metadata:
+      metadata === undefined
+        ? undefined
+        : parseStringRecord(metadata, `tasks[${index}].metadata`),
+  });
+}
+
+function parseRequiredString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Scheduled task field "${fieldName}" must be a non-empty string`);
+  }
+
+  return value.trim();
+}
+
+function parseOptionalString(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error(`Scheduled task field "${fieldName}" must be a string`);
+  }
+
+  const trimmedValue = value.trim();
+  return trimmedValue.length === 0 ? undefined : trimmedValue;
+}
+
+function parseOptionalBoolean(
+  value: unknown,
+  fieldName: string,
+): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`Scheduled task field "${fieldName}" must be a boolean`);
+  }
+
+  return value;
+}
+
+function parseStringRecord(
+  value: unknown,
+  fieldName: string,
+): Record<string, string> {
+  if (!isRecord(value)) {
+    throw new Error(`Scheduled task field "${fieldName}" must be an object`);
+  }
+
+  const output: Record<string, string> = {};
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (typeof entryValue !== 'string') {
+      throw new Error(
+        `Scheduled task field "${fieldName}.${key}" must be a string`,
+      );
+    }
+
+    output[key] = entryValue;
+  }
+
+  return output;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown error';
 }

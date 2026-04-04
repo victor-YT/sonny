@@ -1,4 +1,12 @@
 import { loadConfig, type RuntimeConfig } from './config.js';
+import {
+  ContextManager,
+  type ContextManagerConfig,
+} from './context-manager.js';
+import {
+  ConversationHistory,
+  type ConversationHistoryConfig,
+} from './conversation-history.js';
 import type {
   LlmMessage,
   LlmProvider,
@@ -7,6 +15,10 @@ import type {
 } from './providers/llm.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
 import { OllamaProvider } from './providers/ollama.js';
+import type {
+  ProactiveAgent,
+  ProactiveNotification,
+} from './proactive-agent.js';
 import {
   SkillRegistry,
   type SkillRegistryConfig,
@@ -22,9 +34,14 @@ export interface GatewayConfig {
   sessionConfig?: SessionConfig;
   memoryManager?: MemoryManager;
   memoryManagerConfig?: MemoryManagerConfig;
+  contextManager?: ContextManager;
+  contextManagerConfig?: ContextManagerConfig;
+  conversationHistory?: ConversationHistory;
+  conversationHistoryConfig?: ConversationHistoryConfig;
   promptBuilder?: PromptBuilder;
   skillRegistry?: SkillRegistry;
   skillRegistryConfig?: SkillRegistryConfig;
+  proactiveAgent?: ProactiveAgent;
 }
 
 export class Gateway {
@@ -32,14 +49,35 @@ export class Gateway {
   private readonly session: Session;
   private readonly toolRouter: ToolRouter;
   private readonly memoryManager: MemoryManager;
+  private readonly contextManager: ContextManager;
+  private readonly conversationHistory: ConversationHistory;
   private readonly promptBuilder: PromptBuilder;
   private readonly skillRegistry: SkillRegistry;
   private readonly runtimeConfig: RuntimeConfig | undefined;
+  private readonly proactiveListeners = new Set<
+    (notification: ProactiveNotification) => void | Promise<void>
+  >();
+  private readonly detachProactiveListener: (() => void) | undefined;
 
   public constructor(config: GatewayConfig) {
     this.runtimeConfig = this.resolveRuntimeConfig(config);
     this.llmProvider = this.createLlmProvider(config, this.runtimeConfig);
-    this.session = new Session(config.sessionConfig);
+    this.contextManager =
+      config.contextManager ??
+      new ContextManager(this.createContextManagerConfig(config, this.runtimeConfig));
+    this.conversationHistory =
+      config.conversationHistory ??
+      new ConversationHistory({
+        ...config.conversationHistoryConfig,
+        maxInMemoryMessages:
+          config.conversationHistoryConfig?.maxInMemoryMessages ??
+          config.sessionConfig?.maxHistoryLength,
+        tokenEstimator: (message) => this.contextManager.estimateMessageTokens(message),
+      });
+    this.session = new Session({
+      ...config.sessionConfig,
+      conversationHistory: this.conversationHistory,
+    });
     this.toolRouter = new ToolRouter();
     this.memoryManager =
       config.memoryManager ??
@@ -56,6 +94,11 @@ export class Gateway {
       config.skillRegistry ??
       new SkillRegistry(this.createSkillRegistryConfig(config, this.runtimeConfig));
     this.skillRegistry.attachToRouter(this.toolRouter);
+    this.detachProactiveListener = config.proactiveAgent?.onNotification(
+      async (notification) => {
+        await this.handleProactiveNotification(notification);
+      },
+    );
   }
 
   public get tools(): ToolRouter {
@@ -70,8 +113,18 @@ export class Gateway {
     return this.skillRegistry;
   }
 
+  public onProactiveNotification(
+    listener: (notification: ProactiveNotification) => void | Promise<void>,
+  ): () => void {
+    this.proactiveListeners.add(listener);
+
+    return () => {
+      this.proactiveListeners.delete(listener);
+    };
+  }
+
   public async chat(userMessage: string): Promise<string> {
-    const systemPrompt = await this.buildSystemPrompt(userMessage);
+    const baseSystemPrompt = await this.buildSystemPrompt(userMessage);
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -79,20 +132,28 @@ export class Gateway {
 
     this.session.addMessage(userEntry);
     await this.memoryManager.recordMessage(this.session.id, userEntry);
+    let contextWindow = this.contextManager.buildContextWindow({
+      systemPrompt: baseSystemPrompt,
+      entries: this.session.getEntries(),
+    });
 
-    let response = await this.llmProvider.generate(this.session.getHistory(), {
+    let response = await this.llmProvider.generate(contextWindow.messages, {
       tools: this.toolRouter.getDefinitions(),
-      systemPrompt,
+      systemPrompt: contextWindow.systemPrompt,
     });
 
     while (this.hasToolCalls(response)) {
       this.session.addMessage(response);
       await this.memoryManager.recordMessage(this.session.id, response);
       await this.executeToolCalls(response.toolCalls);
+      contextWindow = this.contextManager.buildContextWindow({
+        systemPrompt: baseSystemPrompt,
+        entries: this.session.getEntries(),
+      });
 
-      response = await this.llmProvider.generate(this.session.getHistory(), {
+      response = await this.llmProvider.generate(contextWindow.messages, {
         tools: this.toolRouter.getDefinitions(),
-        systemPrompt,
+        systemPrompt: contextWindow.systemPrompt,
       });
     }
 
@@ -105,7 +166,7 @@ export class Gateway {
   public async *streamChat(
     userMessage: string,
   ): AsyncIterable<LlmStreamChunk> {
-    const systemPrompt = await this.buildSystemPrompt(userMessage);
+    const baseSystemPrompt = await this.buildSystemPrompt(userMessage);
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -113,12 +174,16 @@ export class Gateway {
 
     this.session.addMessage(userEntry);
     await this.memoryManager.recordMessage(this.session.id, userEntry);
+    const contextWindow = this.contextManager.buildContextWindow({
+      systemPrompt: baseSystemPrompt,
+      entries: this.session.getEntries(),
+    });
 
     let assistantContent = '';
 
-    for await (const chunk of this.llmProvider.stream(this.session.getHistory(), {
+    for await (const chunk of this.llmProvider.stream(contextWindow.messages, {
       tools: this.toolRouter.getDefinitions(),
-      systemPrompt,
+      systemPrompt: contextWindow.systemPrompt,
     })) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
         assistantContent += chunk.text;
@@ -141,7 +206,9 @@ export class Gateway {
   }
 
   public close(): void {
+    this.detachProactiveListener?.();
     this.memoryManager.close();
+    this.conversationHistory.close();
   }
 
   public async finalizeSession(): Promise<void> {
@@ -215,6 +282,23 @@ export class Gateway {
     };
   }
 
+  private createContextManagerConfig(
+    config: GatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): ContextManagerConfig {
+    const contextManagerConfig = config.contextManagerConfig ?? {};
+
+    if (runtimeConfig === undefined) {
+      return contextManagerConfig;
+    }
+
+    return {
+      ...contextManagerConfig,
+      maxTokens:
+        contextManagerConfig.maxTokens ?? runtimeConfig.memory.maxTokens,
+    };
+  }
+
   private createSkillRegistryConfig(
     config: GatewayConfig,
     runtimeConfig: RuntimeConfig | undefined,
@@ -255,4 +339,37 @@ export class Gateway {
       await this.memoryManager.recordMessage(this.session.id, toolEntry);
     }
   }
+
+  private async handleProactiveNotification(
+    notification: ProactiveNotification,
+  ): Promise<void> {
+    const assistantEntry: LlmMessage = {
+      role: 'assistant',
+      content: formatProactiveNotification(notification),
+    };
+
+    this.session.addMessage(assistantEntry);
+    await this.memoryManager.recordMessage(this.session.id, assistantEntry);
+
+    for (const listener of this.proactiveListeners) {
+      await listener(notification);
+    }
+  }
+}
+
+function formatProactiveNotification(
+  notification: ProactiveNotification,
+): string {
+  const title = notification.title.trim();
+  const body = notification.body.trim();
+
+  if (title.length === 0) {
+    return body;
+  }
+
+  if (body.length === 0) {
+    return `[Proactive] ${title}`;
+  }
+
+  return `[Proactive] ${title}\n${body}`;
 }
