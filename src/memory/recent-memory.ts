@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import BetterSqlite3 from 'better-sqlite3';
 
 import type { LlmMessage } from '../core/providers/llm.js';
 
@@ -49,7 +49,7 @@ export interface RecentMemoryMessage {
 }
 
 export class RecentMemory {
-  private readonly database: DatabaseSync;
+  private readonly database: BetterSqlite3.Database;
   private readonly retentionDays: number;
   private readonly clock: () => Date;
 
@@ -58,7 +58,7 @@ export class RecentMemory {
 
     mkdirSync(dirname(databasePath), { recursive: true });
 
-    this.database = new DatabaseSync(databasePath);
+    this.database = new BetterSqlite3(databasePath);
     this.retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS;
     this.clock = config.clock ?? (() => new Date());
 

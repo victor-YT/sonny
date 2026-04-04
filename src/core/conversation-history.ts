@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import BetterSqlite3 from 'better-sqlite3';
 
 import type { LlmMessage } from './providers/llm.js';
 
@@ -47,7 +47,7 @@ export interface PersistedConversationMessage {
 }
 
 export class ConversationHistory {
-  private readonly database: DatabaseSync;
+  private readonly database: BetterSqlite3.Database;
   private readonly maxInMemoryMessages: number;
   private readonly tokenEstimator: (message: LlmMessage) => number;
   private readonly clock: () => Date;
@@ -58,7 +58,7 @@ export class ConversationHistory {
 
     mkdirSync(dirname(databasePath), { recursive: true });
 
-    this.database = new DatabaseSync(databasePath);
+    this.database = new BetterSqlite3(databasePath);
     this.maxInMemoryMessages =
       config.maxInMemoryMessages ?? DEFAULT_MAX_IN_MEMORY_MESSAGES;
     this.tokenEstimator = config.tokenEstimator ?? estimateMessageTokens;
