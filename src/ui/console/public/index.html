@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sonny Control Panel</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f4efe3;
+        --panel: rgba(255, 252, 246, 0.86);
+        --panel-border: rgba(31, 41, 55, 0.12);
+        --ink: #14212b;
+        --muted: #5d6b75;
+        --accent: #b85c38;
+        --accent-strong: #8f4022;
+        --ok: #2f6b4f;
+        --shadow: 0 18px 45px rgba(20, 33, 43, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(184, 92, 56, 0.16), transparent 28%),
+          radial-gradient(circle at top right, rgba(47, 107, 79, 0.14), transparent 24%),
+          linear-gradient(180deg, #fbf7ef 0%, var(--page) 100%);
+      }
+
+      main {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 32px 20px 48px;
+      }
+
+      .hero {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 24px;
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        font-size: clamp(2rem, 5vw, 3.4rem);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p {
+        margin: 12px 0 0;
+        max-width: 620px;
+        color: var(--muted);
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      button,
+      select {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+      }
+
+      button.secondary {
+        background: rgba(20, 33, 43, 0.08);
+        color: var(--ink);
+        box-shadow: none;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: rgba(47, 107, 79, 0.12);
+        color: var(--ok);
+        font-size: 0.92rem;
+        font-weight: 600;
+      }
+
+      .badge::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .panel {
+        grid-column: span 12;
+        border: 1px solid var(--panel-border);
+        border-radius: 24px;
+        padding: 18px;
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        box-shadow: var(--shadow);
+      }
+
+      .panel.wide {
+        grid-column: span 7;
+      }
+
+      .panel.tall {
+        grid-column: span 5;
+      }
+
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      .meta,
+      .empty,
+      .hint {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      dl {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin: 0;
+      }
+
+      dt {
+        color: var(--muted);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      dd {
+        margin: 4px 0 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .list-item {
+        border: 1px solid rgba(20, 33, 43, 0.08);
+        border-radius: 18px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.5);
+      }
+
+      .list-item strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .memory-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 300px;
+        border: 1px solid rgba(20, 33, 43, 0.12);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        resize: vertical;
+        font: 0.95rem/1.5 "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+
+      code {
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+
+      @media (max-width: 900px) {
+        .panel.wide,
+        .panel.tall {
+          grid-column: span 12;
+        }
+
+        .hero {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div>
+          <h1>Sonny Control Panel</h1>
+          <p>
+            Local diagnostics for memory, recent conversations, installed skill
+            modules, and gateway state.
+          </p>
+        </div>
+        <div class="toolbar">
+          <span class="badge" id="connection-status">Connecting</span>
+          <button type="button" id="refresh-button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Status</h2>
+            <span class="meta" id="status-updated">Waiting for first fetch</span>
+          </div>
+          <dl id="status-grid">
+            <div>
+              <dt>Gateway</dt>
+              <dd id="status-gateway">Unknown</dd>
+            </div>
+            <div>
+              <dt>Voice</dt>
+              <dd id="status-voice">Unknown</dd>
+            </div>
+            <div>
+              <dt>Memory Files</dt>
+              <dd id="status-memory-count">0</dd>
+            </div>
+            <div>
+              <dt>Recent Messages</dt>
+              <dd id="status-conversation-count">0</dd>
+            </div>
+            <div>
+              <dt>Skills</dt>
+              <dd id="status-skill-count">0</dd>
+            </div>
+            <div>
+              <dt>Memory Directory</dt>
+              <dd id="status-memory-directory"><code>Loading</code></dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="panel wide">
+          <div class="panel-header">
+            <h2>Memory Editor</h2>
+            <span class="meta" id="memory-updated">No document loaded</span>
+          </div>
+          <div class="stack">
+            <div class="memory-controls">
+              <label for="memory-select">Document</label>
+              <select id="memory-select"></select>
+              <button type="button" class="secondary" id="memory-reload-button">
+                Reload
+              </button>
+              <button type="button" id="memory-save-button">Save Memory</button>
+            </div>
+            <textarea
+              id="memory-editor"
+              spellcheck="false"
+              aria-label="Memory document editor"
+            ></textarea>
+            <p class="hint" id="memory-path">Choose a memory document to inspect.</p>
+          </div>
+        </article>
+
+        <article class="panel tall">
+          <div class="panel-header">
+            <h2>Skills</h2>
+            <span class="meta" id="skills-directory">Loading</span>
+          </div>
+          <div class="list" id="skills-list">
+            <p class="empty">No skill data loaded yet.</p>
+          </div>
+        </article>
+
+        <article class="panel wide">
+          <div class="panel-header">
+            <h2>Recent Conversations</h2>
+            <span class="meta">Newest first</span>
+          </div>
+          <div class="list" id="conversations-list">
+            <p class="empty">No recent conversation data loaded yet.</p>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
