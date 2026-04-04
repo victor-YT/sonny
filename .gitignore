@@ -8,3 +8,5 @@ dev/
 
 .idea/
 *.tsbuildinfo
+data/memory/
+data/memory/*.sqlite
