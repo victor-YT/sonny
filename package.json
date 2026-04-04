@@ -24,7 +24,9 @@
     "typescript-eslint": "^8.58.0"
   },
   "dependencies": {
+    "@types/express": "^5.0.6",
     "electron": "^34.5.8",
+    "express": "^5.2.1",
     "menubar": "^9.5.2"
   }
 }
