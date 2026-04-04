@@ -1,3 +1,4 @@
+import type { RuntimeConfig } from './config.js';
 import type {
   LlmMessage,
   LlmProvider,
@@ -5,6 +6,7 @@ import type {
   ToolCall,
 } from './providers/llm.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
+import { OllamaProvider } from './providers/ollama.js';
 import {
   SkillRegistry,
   type SkillRegistryConfig,
@@ -15,7 +17,8 @@ import { Session, type SessionConfig } from './session.js';
 import { ToolRouter } from './tool-router.js';
 
 export interface GatewayConfig {
-  llmProvider: LlmProvider;
+  llmProvider?: LlmProvider;
+  runtimeConfig?: RuntimeConfig;
   sessionConfig?: SessionConfig;
   memoryManager?: MemoryManager;
   memoryManagerConfig?: MemoryManagerConfig;
@@ -33,13 +36,13 @@ export class Gateway {
   private readonly skillRegistry: SkillRegistry;
 
   public constructor(config: GatewayConfig) {
-    this.llmProvider = config.llmProvider;
+    this.llmProvider = this.createLlmProvider(config);
     this.session = new Session(config.sessionConfig);
     this.toolRouter = new ToolRouter();
     this.memoryManager =
       config.memoryManager ??
       new MemoryManager({
-        ...config.memoryManagerConfig,
+        ...this.createMemoryManagerConfig(config),
         llmProvider: this.llmProvider,
       });
     this.promptBuilder =
@@ -151,6 +154,42 @@ export class Gateway {
     } finally {
       this.session.clear();
     }
+  }
+
+  private createLlmProvider(config: GatewayConfig): LlmProvider {
+    if (config.llmProvider !== undefined) {
+      return config.llmProvider;
+    }
+
+    if (config.runtimeConfig !== undefined) {
+      return new OllamaProvider({
+        baseUrl: config.runtimeConfig.ollama.baseUrl,
+        model: config.runtimeConfig.ollama.model,
+      });
+    }
+
+    throw new Error(
+      'Gateway requires either llmProvider or runtimeConfig to initialize.',
+    );
+  }
+
+  private createMemoryManagerConfig(config: GatewayConfig): MemoryManagerConfig {
+    const memoryManagerConfig = config.memoryManagerConfig ?? {};
+    const runtimeConfig = config.runtimeConfig;
+
+    if (runtimeConfig === undefined) {
+      return memoryManagerConfig;
+    }
+
+    return {
+      ...memoryManagerConfig,
+      recentMemoryConfig: {
+        retentionDays:
+          memoryManagerConfig.recentMemoryConfig?.retentionDays ??
+          runtimeConfig.memory.retentionDays,
+        ...memoryManagerConfig.recentMemoryConfig,
+      },
+    };
   }
 
   private hasToolCalls(
