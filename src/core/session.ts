@@ -46,6 +46,10 @@ export class Session {
     ];
   }
 
+  public getHistory(): LlmMessage[] {
+    return [...this.history];
+  }
+
   public setSystemPrompt(prompt: string): void {
     this.systemPrompt = prompt;
   }

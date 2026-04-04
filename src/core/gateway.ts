@@ -4,23 +4,29 @@ import type {
   LlmStreamChunk,
   ToolCall,
 } from './providers/llm.js';
+import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
 import { Session, type SessionConfig } from './session.js';
 import { ToolRouter } from './tool-router.js';
 
 export interface GatewayConfig {
   llmProvider: LlmProvider;
   sessionConfig?: SessionConfig;
+  memoryManager?: MemoryManager;
+  memoryManagerConfig?: MemoryManagerConfig;
 }
 
 export class Gateway {
   private readonly llmProvider: LlmProvider;
   private readonly session: Session;
   private readonly toolRouter: ToolRouter;
+  private readonly memoryManager: MemoryManager;
 
   public constructor(config: GatewayConfig) {
     this.llmProvider = config.llmProvider;
     this.session = new Session(config.sessionConfig);
     this.toolRouter = new ToolRouter();
+    this.memoryManager =
+      config.memoryManager ?? new MemoryManager(config.memoryManagerConfig);
   }
 
   public get tools(): ToolRouter {
@@ -32,10 +38,13 @@ export class Gateway {
   }
 
   public async chat(userMessage: string): Promise<string> {
-    this.session.addMessage({
+    const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
-    });
+    };
+
+    this.session.addMessage(userEntry);
+    await this.memoryManager.recordMessage(this.session.id, userEntry);
 
     let response = await this.llmProvider.generate(this.session.getMessages(), {
       tools: this.toolRouter.getDefinitions(),
@@ -43,6 +52,7 @@ export class Gateway {
 
     while (this.hasToolCalls(response)) {
       this.session.addMessage(response);
+      await this.memoryManager.recordMessage(this.session.id, response);
       await this.executeToolCalls(response.toolCalls);
 
       response = await this.llmProvider.generate(this.session.getMessages(), {
@@ -51,6 +61,7 @@ export class Gateway {
     }
 
     this.session.addMessage(response);
+    await this.memoryManager.recordMessage(this.session.id, response);
 
     return response.content;
   }
@@ -58,10 +69,13 @@ export class Gateway {
   public async *streamChat(
     userMessage: string,
   ): AsyncIterable<LlmStreamChunk> {
-    this.session.addMessage({
+    const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
-    });
+    };
+
+    this.session.addMessage(userEntry);
+    await this.memoryManager.recordMessage(this.session.id, userEntry);
 
     let assistantContent = '';
 
@@ -75,14 +89,21 @@ export class Gateway {
       yield chunk;
     }
 
-    this.session.addMessage({
+    const assistantEntry: LlmMessage = {
       role: 'assistant',
       content: assistantContent,
-    });
+    };
+
+    this.session.addMessage(assistantEntry);
+    await this.memoryManager.recordMessage(this.session.id, assistantEntry);
   }
 
   public resetSession(): void {
     this.session.clear();
+  }
+
+  public close(): void {
+    this.memoryManager.close();
   }
 
   private hasToolCalls(
@@ -95,11 +116,14 @@ export class Gateway {
     for (const toolCall of toolCalls) {
       const result = await this.toolRouter.execute(toolCall);
 
-      this.session.addMessage({
+      const toolEntry: LlmMessage = {
         role: 'tool',
         content: result,
         toolCallId: toolCall.id,
-      });
+      };
+
+      this.session.addMessage(toolEntry);
+      await this.memoryManager.recordMessage(this.session.id, toolEntry);
     }
   }
 }
