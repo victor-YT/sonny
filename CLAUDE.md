@@ -29,3 +29,7 @@ Local-first personal AI assistant with persistent memory, voice, and personality
 
 ## Commits
 `feat:` `fix:` `refactor:` `docs:` `chore:`
+
+## Session Management
+Commit progress every 30-60 minutes or after each phase completes.
+If uncertain about a large refactor, pause and summarize before proceeding.
