@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { RecentMemory } from '../memory/recent-memory.js';
 import type { MonitorChangeEvent } from '../skills/web-monitor.js';
+import type { NotificationManager } from './notification-manager.js';
 import {
   EventMonitor,
   type EventMonitorConfig,
@@ -42,6 +43,7 @@ export interface ProactiveAgentConfig {
   schedulerConfig?: SchedulerConfig;
   eventMonitor?: EventMonitor;
   eventMonitorConfig?: EventMonitorConfig;
+  notificationManager?: NotificationManager;
   fileChangeCooldownMs?: number;
 }
 
@@ -57,6 +59,7 @@ export class ProactiveAgent {
   private readonly notificationLimit: number;
   private readonly scheduler: Scheduler;
   private readonly eventMonitor: EventMonitor;
+  private readonly notificationManager: NotificationManager | undefined;
   private readonly fileChangeCooldownMs: number;
   private readonly notificationListeners: Set<NotificationListener>;
   private readonly errorListeners: Set<ErrorListener>;
@@ -70,8 +73,15 @@ export class ProactiveAgent {
     this.clock = config.clock ?? (() => new Date());
     this.notificationLimit = config.notificationLimit ?? DEFAULT_NOTIFICATION_LIMIT;
     this.scheduler = config.scheduler ?? new Scheduler(config.schedulerConfig);
+    this.notificationManager = config.notificationManager;
     this.eventMonitor =
-      config.eventMonitor ?? new EventMonitor(config.eventMonitorConfig);
+      config.eventMonitor ??
+      new EventMonitor({
+        ...config.eventMonitorConfig,
+        notificationManager:
+          config.eventMonitorConfig?.notificationManager ??
+          config.notificationManager,
+      });
     this.fileChangeCooldownMs =
       config.fileChangeCooldownMs ?? DEFAULT_FILE_CHANGE_COOLDOWN_MS;
     this.notificationListeners = new Set<NotificationListener>();
@@ -278,6 +288,14 @@ export class ProactiveAgent {
       await listener(notification);
     }
 
+    if (this.notificationManager !== undefined) {
+      await this.notificationManager.notify({
+        title: notification.title,
+        message: notification.body,
+        badge: resolveNotificationBadge(notification),
+      });
+    }
+
     return notification;
   }
 
@@ -335,6 +353,19 @@ function resolveNotificationLabel(monitoredPath: MonitoredPath): string {
   }
 
   return humanizeIdentifier(monitoredPath.id);
+}
+
+function resolveNotificationBadge(notification: ProactiveNotification): string {
+  switch (notification.type) {
+    case 'monitor-change':
+      return 'W';
+    case 'scheduled-task':
+      return 'S';
+    case 'file-change':
+      return 'F';
+    default:
+      return '•';
+  }
 }
 
 function humanizeIdentifier(value: string): string {

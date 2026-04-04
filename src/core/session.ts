@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
+import {
+  ConversationHistory,
+  type ConversationHistoryEntry,
+} from './conversation-history.js';
 import type { LlmMessage } from './providers/llm.js';
 
 const DEFAULT_MAX_HISTORY_LENGTH = 50;
@@ -7,31 +11,30 @@ const DEFAULT_MAX_HISTORY_LENGTH = 50;
 export interface SessionConfig {
   maxHistoryLength?: number;
   systemPrompt?: string;
+  conversationHistory?: ConversationHistory;
 }
 
 export class Session {
   public readonly id: string;
-  private history: LlmMessage[];
   private systemPrompt: string;
-  private readonly maxHistoryLength: number;
+  private readonly conversationHistory: ConversationHistory;
 
   public constructor(config: SessionConfig = {}) {
     this.id = randomUUID();
-    this.history = [];
     this.systemPrompt = config.systemPrompt ?? '';
-    this.maxHistoryLength = config.maxHistoryLength ?? DEFAULT_MAX_HISTORY_LENGTH;
+    this.conversationHistory =
+      config.conversationHistory ??
+      new ConversationHistory({
+        maxInMemoryMessages: config.maxHistoryLength ?? DEFAULT_MAX_HISTORY_LENGTH,
+      });
   }
 
   public addMessage(message: LlmMessage): void {
-    this.history.push(message);
-
-    if (this.history.length > this.maxHistoryLength) {
-      this.history = this.history.slice(-this.maxHistoryLength);
-    }
+    this.conversationHistory.addMessage(this.id, message);
   }
 
   public getMessages(): LlmMessage[] {
-    const messages = [...this.history];
+    const messages = this.getHistory();
 
     if (this.systemPrompt.length === 0) {
       return messages;
@@ -47,7 +50,15 @@ export class Session {
   }
 
   public getHistory(): LlmMessage[] {
-    return [...this.history];
+    return this.conversationHistory.getSessionMessages(this.id);
+  }
+
+  public getEntries(): ConversationHistoryEntry[] {
+    return this.conversationHistory.getSessionEntries(this.id);
+  }
+
+  public getLastTurns(turnCount: number): ConversationHistoryEntry[] {
+    return this.conversationHistory.getLastTurns(this.id, turnCount);
   }
 
   public setSystemPrompt(prompt: string): void {
@@ -59,10 +70,10 @@ export class Session {
   }
 
   public clear(): void {
-    this.history = [];
+    this.conversationHistory.clearSession(this.id);
   }
 
   public get messageCount(): number {
-    return this.history.length;
+    return this.conversationHistory.getSessionEntries(this.id).length;
   }
 }

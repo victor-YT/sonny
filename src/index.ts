@@ -5,8 +5,19 @@ import { stdin, stdout } from 'node:process';
 import { loadConfig, type RuntimeConfig } from './core/config.js';
 import { Gateway } from './core/gateway.js';
 import { MonitorScheduler } from './core/monitor-scheduler.js';
-import { NotificationManager } from './core/notification-manager.js';
+import {
+  NotificationManager,
+  type NotificationPreference,
+} from './core/notification-manager.js';
 import { Notifier } from './core/notifier.js';
+import {
+  ProactiveAgent,
+  type ProactiveNotification,
+} from './core/proactive-agent.js';
+import {
+  getDefaultSchedulesPath,
+  loadScheduledTasks,
+} from './core/scheduler.js';
 import {
   loadStartupEnvironment,
   type StartupEnvironment,
@@ -31,9 +42,22 @@ function toErrorMessage(error: unknown): string {
   return 'Unknown error';
 }
 
+function readNotificationPreference(
+  environment: NodeJS.ProcessEnv = process.env,
+): NotificationPreference {
+  const value = environment.SONNY_NOTIFICATION_PREFERENCE?.trim().toLowerCase();
+
+  if (value === 'voice' || value === 'visual' || value === 'both') {
+    return value;
+  }
+
+  return 'both';
+}
+
 function createGateway(
   runtimeConfig: RuntimeConfig,
   startupEnvironment: StartupEnvironment,
+  proactiveAgent: ProactiveAgent,
 ): Gateway {
   return new Gateway({
     runtimeConfig: {
@@ -46,24 +70,29 @@ function createGateway(
     sessionConfig: {
       systemPrompt: SYSTEM_PROMPT,
     },
+    proactiveAgent,
   });
 }
 
 function createMonitoringRuntime(
+  proactiveAgent: ProactiveAgent,
   voiceManager?: Pick<VoiceManager, 'currentState' | 'isRunning' | 'speak'>,
 ): {
+  proactiveAgent: ProactiveAgent;
   scheduler: MonitorScheduler;
+  monitorRegistry: MonitorRegistry;
 } {
   const monitorRegistry = new MonitorRegistry();
   const notificationManager = new NotificationManager({
     notifier: new Notifier({
       voiceManager,
     }),
+    preference: readNotificationPreference(process.env),
     voiceManager,
   });
   const webMonitor = new WebMonitor({
     monitorRegistry,
-    notificationManager,
+    proactiveAgent,
   });
   const scheduler = new MonitorScheduler({
     monitorRegistry,
@@ -76,8 +105,32 @@ function createMonitoringRuntime(
   });
 
   return {
+    proactiveAgent,
     scheduler,
+    monitorRegistry,
   };
+}
+
+async function initializeMonitoringRuntime(runtime: {
+  proactiveAgent: ProactiveAgent;
+  monitorRegistry: MonitorRegistry;
+}): Promise<void> {
+  runtime.proactiveAgent.setScheduledTasks(loadScheduledTasks());
+  await runtime.proactiveAgent.setMonitoredPaths([
+    {
+      id: 'monitor-registry',
+      path: runtime.monitorRegistry.path,
+      label: 'Monitor Registry',
+      recursive: false,
+    },
+    {
+      id: 'proactive-schedules',
+      path: getDefaultSchedulesPath(),
+      label: 'Proactive Schedules',
+      recursive: false,
+    },
+  ]);
+  await runtime.proactiveAgent.start();
 }
 
 async function runVoice(voiceGateway: VoiceGateway): Promise<void> {
@@ -120,17 +173,29 @@ async function runVoice(voiceGateway: VoiceGateway): Promise<void> {
 async function main(): Promise<void> {
   const startupEnvironment = loadStartupEnvironment(process.env);
   const runtimeConfig = loadConfig();
-  const gateway = createGateway(runtimeConfig, startupEnvironment);
+  const proactiveAgent = new ProactiveAgent();
+  const gateway = createGateway(
+    runtimeConfig,
+    startupEnvironment,
+    proactiveAgent,
+  );
   const voiceGateway = startupEnvironment.voiceMode
     ? createVoiceGatewayFromEnvironment(gateway, process.env)
     : undefined;
-  const monitoringRuntime = createMonitoringRuntime(voiceGateway?.manager);
+  const monitoringRuntime = createMonitoringRuntime(
+    proactiveAgent,
+    voiceGateway?.manager,
+  );
+  const proactiveOutputCleanup = gateway.onProactiveNotification((notification) => {
+    stdout.write(`${formatProactiveNotification(notification)}\n`);
+  });
   const consoleServer = await startConsoleServer({
     gateway,
   });
 
   stdout.write(`[console] ${consoleServer.address.url}\n`);
 
+  await initializeMonitoringRuntime(monitoringRuntime);
   monitoringRuntime.scheduler.start();
 
   if (startupEnvironment.voiceMode) {
@@ -142,6 +207,7 @@ async function main(): Promise<void> {
       await runVoice(voiceGateway);
     } finally {
       monitoringRuntime.scheduler.stop();
+      await monitoringRuntime.proactiveAgent.stop();
       await consoleServer.stop();
 
       try {
@@ -150,6 +216,7 @@ async function main(): Promise<void> {
         console.error(`Memory finalization failed: ${toErrorMessage(error)}`);
       }
 
+      proactiveOutputCleanup();
       gateway.close();
     }
 
@@ -203,6 +270,7 @@ async function main(): Promise<void> {
     }
   } finally {
     monitoringRuntime.scheduler.stop();
+    await monitoringRuntime.proactiveAgent.stop();
     await consoleServer.stop();
 
     try {
@@ -211,6 +279,7 @@ async function main(): Promise<void> {
       console.error(`Memory finalization failed: ${toErrorMessage(error)}`);
     }
 
+    proactiveOutputCleanup();
     gateway.close();
     rl.close();
   }
@@ -220,3 +289,13 @@ main().catch((error: unknown) => {
   console.error(`Fatal error: ${toErrorMessage(error)}`);
   process.exit(1);
 });
+
+function formatProactiveNotification(notification: ProactiveNotification): string {
+  const body = notification.body.trim();
+
+  if (body.length === 0) {
+    return `[proactive] ${notification.title}`;
+  }
+
+  return `[proactive] ${notification.title}: ${body.replace(/\n+/gu, ' | ')}`;
+}

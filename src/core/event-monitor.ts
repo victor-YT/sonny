@@ -2,6 +2,8 @@ import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
+import type { NotificationManager } from './notification-manager.js';
+
 export interface MonitoredPathDefinition {
   id?: string;
   path: string;
@@ -38,6 +40,7 @@ export interface EventMonitorConfig {
   paths?: MonitoredPathDefinition[];
   cwd?: string;
   debounceWindowMs?: number;
+  notificationManager?: NotificationManager;
 }
 
 interface WatchRegistration {
@@ -52,6 +55,7 @@ const DEFAULT_DEBOUNCE_WINDOW_MS = 250;
 export class EventMonitor {
   private readonly cwd: string;
   private readonly debounceWindowMs: number;
+  private readonly notificationManager: NotificationManager | undefined;
   private readonly listeners = new Set<EventMonitorListener>();
   private readonly paths = new Map<string, MonitoredPath>();
   private readonly watchers = new Map<string, WatchRegistration>();
@@ -63,6 +67,7 @@ export class EventMonitor {
     this.cwd = config.cwd ?? process.cwd();
     this.debounceWindowMs =
       config.debounceWindowMs ?? DEFAULT_DEBOUNCE_WINDOW_MS;
+    this.notificationManager = config.notificationManager;
 
     if (config.paths !== undefined) {
       for (const definition of config.paths) {
@@ -220,6 +225,11 @@ export class EventMonitor {
         error: resolvedError,
         monitoredPath: { ...monitoredPath },
         timestamp: Date.now(),
+      });
+      void this.notificationManager?.notify({
+        title: monitoredPath.label?.trim() || 'Event Monitor Error',
+        message: resolvedError.message,
+        badge: '!',
       });
       throw resolvedError;
     }

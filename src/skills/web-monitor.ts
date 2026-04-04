@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import type { ProactiveAgent } from '../core/proactive-agent.js';
 import type { NotificationPayload } from '../core/notifier.js';
 import type { NotificationManager } from '../core/notification-manager.js';
 import {
@@ -44,6 +45,7 @@ export interface MonitorCheckResult {
 
 export interface WebMonitorConfig {
   monitorRegistry?: MonitorRegistry;
+  proactiveAgent?: Pick<ProactiveAgent, 'notifyMonitorChange'>;
   notificationManager?: NotificationManager;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
@@ -71,7 +73,11 @@ export class WebMonitor {
     this.snapshots = new Map<string, MonitorSnapshot>();
     this.changeListeners = new Set<ChangeListener>();
 
-    if (config.notificationManager !== undefined) {
+    if (config.proactiveAgent !== undefined) {
+      this.onChange(async (event) => {
+        await config.proactiveAgent?.notifyMonitorChange(event);
+      });
+    } else if (config.notificationManager !== undefined) {
       this.onChange(async (event) => {
         await config.notificationManager?.notify(
           this.toNotificationPayload(event),
