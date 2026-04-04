@@ -5,4 +5,5 @@ dist/
 
 # for dev
 dev/
-.idea
+
+.idea/
