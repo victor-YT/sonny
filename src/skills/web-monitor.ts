@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import type { ProactiveAgent } from '../core/proactive-agent.js';
 import {
   MonitorRegistry,
   type MonitorDefinition,
@@ -42,6 +43,7 @@ export interface MonitorCheckResult {
 
 export interface WebMonitorConfig {
   monitorRegistry?: MonitorRegistry;
+  proactiveAgent?: ProactiveAgent;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
   fetchTimeoutMs?: number;
@@ -67,6 +69,12 @@ export class WebMonitor {
     this.maxContentLength = config.maxContentLength ?? DEFAULT_MAX_CONTENT_LENGTH;
     this.snapshots = new Map<string, MonitorSnapshot>();
     this.changeListeners = new Set<ChangeListener>();
+
+    if (config.proactiveAgent !== undefined) {
+      this.onChange(async (event) => {
+        await config.proactiveAgent?.notifyMonitorChange(event);
+      });
+    }
   }
 
   public listSnapshots(): MonitorSnapshot[] {
