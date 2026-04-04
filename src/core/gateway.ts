@@ -5,6 +5,8 @@ import type {
   ToolCall,
 } from './providers/llm.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
+import { loadPersonalityConfig } from './personality.js';
+import { PromptBuilder } from './prompt-builder.js';
 import { Session, type SessionConfig } from './session.js';
 import { ToolRouter } from './tool-router.js';
 
@@ -13,6 +15,7 @@ export interface GatewayConfig {
   sessionConfig?: SessionConfig;
   memoryManager?: MemoryManager;
   memoryManagerConfig?: MemoryManagerConfig;
+  promptBuilder?: PromptBuilder;
 }
 
 export class Gateway {
@@ -20,6 +23,7 @@ export class Gateway {
   private readonly session: Session;
   private readonly toolRouter: ToolRouter;
   private readonly memoryManager: MemoryManager;
+  private readonly promptBuilder: PromptBuilder;
 
   public constructor(config: GatewayConfig) {
     this.llmProvider = config.llmProvider;
@@ -30,6 +34,11 @@ export class Gateway {
       new MemoryManager({
         ...config.memoryManagerConfig,
         llmProvider: this.llmProvider,
+      });
+    this.promptBuilder =
+      config.promptBuilder ??
+      new PromptBuilder({
+        personality: loadPersonalityConfig(),
       });
   }
 
@@ -42,10 +51,7 @@ export class Gateway {
   }
 
   public async chat(userMessage: string): Promise<string> {
-    const systemPrompt = await this.memoryManager.buildSystemPrompt(
-      this.session.getSystemPrompt(),
-      userMessage,
-    );
+    const systemPrompt = await this.buildSystemPrompt(userMessage);
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -79,10 +85,7 @@ export class Gateway {
   public async *streamChat(
     userMessage: string,
   ): AsyncIterable<LlmStreamChunk> {
-    const systemPrompt = await this.memoryManager.buildSystemPrompt(
-      this.session.getSystemPrompt(),
-      userMessage,
-    );
+    const systemPrompt = await this.buildSystemPrompt(userMessage);
     const userEntry: LlmMessage = {
       role: 'user',
       content: userMessage,
@@ -139,6 +142,15 @@ export class Gateway {
     message: LlmMessage,
   ): message is LlmMessage & { toolCalls: ToolCall[] } {
     return (message.toolCalls?.length ?? 0) > 0;
+  }
+
+  private async buildSystemPrompt(userMessage: string): Promise<string> {
+    const injectedMemory = await this.memoryManager.buildSystemPrompt(
+      '',
+      userMessage,
+    );
+
+    return this.promptBuilder.buildSystemPrompt(injectedMemory);
   }
 
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<void> {
