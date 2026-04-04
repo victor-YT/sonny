@@ -8,6 +8,7 @@ export type VoiceEmotionTag =
 export interface EmotionAnalysis {
   primary: VoiceEmotionTag;
   scores: Record<VoiceEmotionTag, number>;
+  chatterboxExaggeration: number;
   exaggeration: number;
 }
 
@@ -25,6 +26,9 @@ const HESITANT_PATTERNS = [
   /\bcould\b/giu,
   /\bnot sure\b/giu,
   /\bseems\b/giu,
+  /\bi'd\b/giu,
+  /\bi would\b/giu,
+  /\bit depends\b/giu,
 ];
 
 const CONFIDENT_PATTERNS = [
@@ -37,6 +41,8 @@ const CONFIDENT_PATTERNS = [
   /\bthe answer is\b/giu,
   /\bhere is\b/giu,
   /\bthe fix is\b/giu,
+  /\bworks because\b/giu,
+  /\bthis is\b/giu,
 ];
 
 const HUMOROUS_PATTERNS = [
@@ -48,6 +54,9 @@ const HUMOROUS_PATTERNS = [
   /\bneat trick\b/giu,
   /\bha(ha)+\b/giu,
   /\blol\b/giu,
+  /\bheh\b/giu,
+  /\bclassic\b/giu,
+  /\bdry run\b/giu,
 ];
 
 const ASSERTIVE_PATTERNS = [
@@ -60,6 +69,9 @@ const ASSERTIVE_PATTERNS = [
   /\bdon't\b/giu,
   /\bnever\b/giu,
   /\balways\b/giu,
+  /\bstart with\b/giu,
+  /\bmake sure\b/giu,
+  /\bship\b/giu,
 ];
 
 export class EmotionTagger {
@@ -71,6 +83,7 @@ export class EmotionTagger {
       return {
         primary: 'neutral',
         scores,
+        chatterboxExaggeration: 0.85,
         exaggeration: 0.85,
       };
     }
@@ -81,15 +94,34 @@ export class EmotionTagger {
     scores.assertive += this.countPatternMatches(normalized, ASSERTIVE_PATTERNS) * 1.2;
     scores.confident += this.countExclamationMarks(normalized) * 0.12;
     scores.hesitant += this.countEllipses(normalized) * 0.35;
+    scores.hesitant += this.countQuestionMarks(normalized) * 0.18;
     scores.humorous += this.countLaughter(normalized) * 1.4;
+    scores.assertive += this.countImperatives(normalized) * 0.35;
 
     const primary = this.selectPrimaryEmotion(scores);
+    const chatterboxExaggeration = this.toChatterboxExaggeration(
+      primary,
+      scores[primary],
+    );
 
     return {
       primary,
       scores,
-      exaggeration: this.toExaggeration(primary, scores[primary]),
+      chatterboxExaggeration,
+      exaggeration: chatterboxExaggeration,
     };
+  }
+
+  public toChatterboxExaggeration(
+    emotion: VoiceEmotionTag,
+    score: number,
+  ): number {
+    const base = this.getBaseExaggeration(emotion);
+    const scaled = base + Math.min(score, 3.5) * 0.12;
+
+    return Number(
+      Math.min(MAX_EXAGGERATION, Math.max(MIN_EXAGGERATION, scaled)).toFixed(2),
+    );
   }
 
   private createBaseScores(): Record<VoiceEmotionTag, number> {
@@ -125,8 +157,36 @@ export class EmotionTagger {
     return (text.match(/\.{3,}/gu) ?? []).length;
   }
 
+  private countQuestionMarks(text: string): number {
+    return (text.match(/\?/gu) ?? []).length;
+  }
+
   private countLaughter(text: string): number {
     return (text.match(/\b(?:ha){2,}\b/giu) ?? []).length;
+  }
+
+  private countImperatives(text: string): number {
+    const lines = text
+      .split(/[\n.!?]+/u)
+      .map((line) => line.trim().toLowerCase())
+      .filter((line) => line.length > 0);
+
+    let count = 0;
+
+    for (const line of lines) {
+      if (
+        line.startsWith('use ') ||
+        line.startsWith('stop ') ||
+        line.startsWith('avoid ') ||
+        line.startsWith('make sure ') ||
+        line.startsWith('do ') ||
+        line.startsWith('start ')
+      ) {
+        count += 1;
+      }
+    }
+
+    return count;
   }
 
   private selectPrimaryEmotion(
@@ -171,18 +231,6 @@ export class EmotionTagger {
       default:
         return 4;
     }
-  }
-
-  private toExaggeration(
-    emotion: VoiceEmotionTag,
-    score: number,
-  ): number {
-    const base = this.getBaseExaggeration(emotion);
-    const scaled = base + Math.min(score, 3) * 0.12;
-
-    return Number(
-      Math.min(MAX_EXAGGERATION, Math.max(MIN_EXAGGERATION, scaled)).toFixed(2),
-    );
   }
 
   private getBaseExaggeration(emotion: VoiceEmotionTag): number {
