@@ -272,7 +272,8 @@ function parseCronField(
       throw new Error(`Invalid cron field "${value}"`);
     }
 
-    const step = stepPart === undefined ? 1 : parseInteger(stepPart, min, max, aliases);
+    const step =
+      stepPart === undefined ? 1 : parseInteger(stepPart, min, max, aliases);
 
     if (step <= 0) {
       throw new Error(`Invalid cron step "${trimmedPart}"`);
@@ -342,9 +343,15 @@ function matchesCronExpression(
   expression: CronExpression,
   referenceDate: Date,
 ): boolean {
-  const minuteMatches = matchesCronField(expression.minute, referenceDate.getMinutes());
+  const minuteMatches = matchesCronField(
+    expression.minute,
+    referenceDate.getMinutes(),
+  );
   const hourMatches = matchesCronField(expression.hour, referenceDate.getHours());
-  const monthMatches = matchesCronField(expression.month, referenceDate.getMonth() + 1);
+  const monthMatches = matchesCronField(
+    expression.month,
+    referenceDate.getMonth() + 1,
+  );
 
   if (!minuteMatches || !hourMatches || !monthMatches) {
     return false;

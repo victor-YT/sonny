@@ -30,6 +30,7 @@ export interface VoiceRuntimeConfig {
 
 export interface MemoryRuntimeConfig {
   retentionDays: number;
+  maxTokens: number;
 }
 
 export interface SkillPermissionConfig {

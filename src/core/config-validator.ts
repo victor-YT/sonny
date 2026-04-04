@@ -80,6 +80,13 @@ export function validateConfig(value: unknown): RuntimeConfig {
         issues,
         'retentionDays',
       ),
+      maxTokens:
+        readOptionalPositiveInteger(
+          memory,
+          'config.memory.maxTokens',
+          issues,
+          'maxTokens',
+        ) ?? 12_000,
     },
     skills: {
       permissions: readSkillPermissions(skills, issues),
@@ -202,6 +209,26 @@ function readPositiveInteger(
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     issues.push(`${path} must be a positive integer.`);
     return 1;
+  }
+
+  return value;
+}
+
+function readOptionalPositiveInteger(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): number | undefined {
+  const value = readNestedValue(root, path, issues, ...segments);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    issues.push(`${path} must be a positive integer when provided.`);
+    return undefined;
   }
 
   return value;
