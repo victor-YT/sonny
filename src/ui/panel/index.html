@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sonny</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #09111b;
+        --bg-elevated: rgba(17, 27, 40, 0.82);
+        --line: rgba(255, 255, 255, 0.08);
+        --text: #edf3fb;
+        --muted: rgba(226, 234, 245, 0.68);
+        --accent: #2dd4bf;
+        --accent-warm: #fb923c;
+        --accent-cool: #60a5fa;
+        font-family: "SF Pro Display", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top right, rgba(45, 212, 191, 0.12), transparent 30%),
+          radial-gradient(circle at bottom left, rgba(96, 165, 250, 0.12), transparent 32%),
+          linear-gradient(180deg, #08111b 0%, #0d1725 100%);
+      }
+
+      .panel {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+
+      .header {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(8, 14, 24, 0.72);
+        backdrop-filter: blur(14px);
+      }
+
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .headline {
+        margin-top: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 640;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: var(--bg-elevated);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.14);
+      }
+
+      .conversation {
+        padding: 16px 18px;
+        overflow: auto;
+        display: grid;
+        align-content: start;
+        gap: 12px;
+      }
+
+      .empty {
+        margin-top: 30px;
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px dashed rgba(255, 255, 255, 0.12);
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .message {
+        max-width: 92%;
+        padding: 12px 14px;
+        border-radius: 18px;
+        line-height: 1.42;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+
+      .message-user {
+        justify-self: end;
+        background: linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(24, 38, 52, 0.92));
+        border-bottom-right-radius: 6px;
+      }
+
+      .message-assistant {
+        justify-self: start;
+        background: linear-gradient(135deg, rgba(96, 165, 250, 0.14), rgba(17, 27, 40, 0.92));
+        border-bottom-left-radius: 6px;
+      }
+
+      .composer {
+        padding: 14px 18px 18px;
+        border-top: 1px solid var(--line);
+        background: rgba(8, 14, 24, 0.72);
+        backdrop-filter: blur(14px);
+      }
+
+      .composer-form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+      }
+
+      .composer-input {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        border-radius: 16px;
+        padding: 12px 14px;
+        font: inherit;
+        outline: none;
+      }
+
+      .composer-input:focus {
+        border-color: rgba(45, 212, 191, 0.45);
+        box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.1);
+      }
+
+      .composer-button {
+        border: 0;
+        border-radius: 16px;
+        padding: 0 16px;
+        min-width: 84px;
+        background: linear-gradient(135deg, #2dd4bf, #60a5fa);
+        color: #08111b;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .composer-button:disabled {
+        cursor: wait;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <header class="header">
+        <div class="eyebrow">Local-first assistant</div>
+        <div class="headline">
+          <h1>Sonny</h1>
+          <div class="status" id="status-chip" aria-live="polite">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-label">Idle</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="conversation" id="conversation" aria-live="polite"></main>
+
+      <footer class="composer">
+        <form class="composer-form" id="composer-form">
+          <input
+            id="composer-input"
+            class="composer-input"
+            name="message"
+            type="text"
+            autocomplete="off"
+            placeholder="Ask something useful."
+          />
+          <button class="composer-button" id="composer-button" type="submit">Send</button>
+        </form>
+      </footer>
+    </div>
+
+    <script type="module" src="./panel.js"></script>
+  </body>
+</html>
