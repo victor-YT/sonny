@@ -137,6 +137,10 @@ export class ChatterboxProvider implements TtsProvider {
       payload.emotion = options.emotion;
     }
 
+    if (options.exaggeration !== undefined) {
+      payload.exaggeration = options.exaggeration;
+    }
+
     return payload;
   }
 

@@ -6,6 +6,10 @@ import type {
   WakeWordListener,
   WakeWordProvider,
 } from './providers/wake-word.js';
+import {
+  ResponseProcessor,
+  type ProcessedVoiceResponse,
+} from './response-processor.js';
 import type { Speaker, SpeakerListener } from './speaker.js';
 import {
   StreamingAudioQueue,
@@ -75,6 +79,7 @@ export interface VoiceManagerConfig {
   defaultTtsOptions?: TtsOptions;
   playbackQueue?: StreamingAudioQueue;
   speaker?: Speaker;
+  responseProcessor?: ResponseProcessor;
 }
 
 export class VoiceManager {
@@ -89,6 +94,7 @@ export class VoiceManager {
   private readonly defaultTtsOptions: TtsOptions;
   private readonly playbackQueue: StreamingAudioQueue;
   private readonly speaker: Speaker | undefined;
+  private readonly responseProcessor: ResponseProcessor;
   private readonly listeners = new Set<VoiceManagerListener>();
   private readonly wakeWordListener: WakeWordListener;
   private readonly speakerListener: SpeakerListener | undefined;
@@ -107,6 +113,7 @@ export class VoiceManager {
     this.defaultTtsOptions = config.defaultTtsOptions ?? {};
     this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
     this.speaker = config.speaker;
+    this.responseProcessor = config.responseProcessor ?? new ResponseProcessor();
     this.wakeWordListener = (event) => {
       void this.handleWakeWordEvent(event);
     };
@@ -216,7 +223,8 @@ export class VoiceManager {
     this.setState('synthesizing');
 
     try {
-      const audio = await this.synthesizeForPlayback(text, {
+      const processedResponse = this.responseProcessor.process(text);
+      const audio = await this.synthesizeForPlayback(processedResponse, {
         ...this.defaultTtsOptions,
         ...options,
       });
@@ -262,7 +270,8 @@ export class VoiceManager {
       });
 
       this.setState('synthesizing');
-      const spokenAudio = await this.synthesizeForPlayback(response, {
+      const processedResponse = this.responseProcessor.process(response);
+      const spokenAudio = await this.synthesizeForPlayback(processedResponse, {
         ...this.defaultTtsOptions,
         ...options.tts,
       });
@@ -378,32 +387,79 @@ export class VoiceManager {
   }
 
   private async synthesizeForPlayback(
-    text: string,
+    response: ProcessedVoiceResponse,
     options: TtsOptions,
   ): Promise<Buffer> {
+    const resolvedOptions = this.resolveTtsOptions(response, options);
+
     if (
       this.ttsProvider.supportsStreaming &&
       this.ttsProvider.streamSynthesize !== undefined
     ) {
-      const sourceStream = this.ttsProvider.streamSynthesize(text, options);
+      const sourceStream = this.streamProcessedResponse(response, resolvedOptions);
       const collectedStream = this.createCollectedStream(sourceStream);
 
       this.playbackQueue.enqueueStream(collectedStream.stream, {
-        text,
-        voice: options.voice,
+        text: response.plainText,
+        voice: resolvedOptions.voice,
       });
 
       return collectedStream.completed;
     }
 
-    const audio = await this.ttsProvider.synthesize(text, options);
+    const audio = await this.ttsProvider.synthesize(
+      response.taggedText,
+      resolvedOptions,
+    );
 
     this.playbackQueue.enqueue(audio, {
-      text,
-      voice: options.voice,
+      text: response.plainText,
+      voice: resolvedOptions.voice,
     });
 
     return audio;
+  }
+
+  private async *streamProcessedResponse(
+    response: ProcessedVoiceResponse,
+    options: TtsOptions,
+  ): AsyncIterable<Buffer> {
+    const streamSynthesize = this.ttsProvider.streamSynthesize;
+
+    if (streamSynthesize === undefined) {
+      throw new Error('Streaming synthesis is unavailable');
+    }
+
+    const sentences = response.sentences.length > 0
+      ? response.sentences
+      : [
+          {
+            index: 0,
+            text: response.plainText,
+            taggedText: response.taggedText,
+            emotion: response.emotion.primary,
+          },
+        ];
+
+    for (const sentence of sentences) {
+      if (sentence.taggedText.trim().length === 0) {
+        continue;
+      }
+
+      for await (const chunk of streamSynthesize(sentence.taggedText, options)) {
+        yield chunk;
+      }
+    }
+  }
+
+  private resolveTtsOptions(
+    response: ProcessedVoiceResponse,
+    options: TtsOptions,
+  ): TtsOptions {
+    return {
+      ...options,
+      exaggeration: options.exaggeration ?? response.emotion.exaggeration,
+    };
   }
 
   private createCollectedStream(
