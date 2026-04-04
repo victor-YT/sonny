@@ -1,24 +1,43 @@
+import type { LlmProvider } from '../core/providers/llm.js';
 import type { LlmMessage } from '../core/providers/llm.js';
 
 import { MemoryStore, type MemoryStoreConfig } from './memory-store.js';
+import {
+  MemoryExtractor,
+  type MemoryExtraction,
+  type MemoryExtractorConfig,
+} from './memory-extractor.js';
 import { RecentMemory, type RecentMemoryConfig } from './recent-memory.js';
 
 export interface MemoryManagerConfig {
+  llmProvider?: LlmProvider;
   memoryStore?: MemoryStore;
   recentMemory?: RecentMemory;
+  memoryExtractor?: MemoryExtractor;
   memoryStoreConfig?: MemoryStoreConfig;
   recentMemoryConfig?: RecentMemoryConfig;
+  memoryExtractorConfig?: Omit<MemoryExtractorConfig, 'llmProvider' | 'memoryStore'>;
 }
 
 export class MemoryManager {
   private readonly memoryStore: MemoryStore;
   private readonly recentMemory: RecentMemory;
+  private readonly memoryExtractor?: MemoryExtractor;
 
   public constructor(config: MemoryManagerConfig = {}) {
     this.memoryStore =
       config.memoryStore ?? new MemoryStore(config.memoryStoreConfig);
     this.recentMemory =
       config.recentMemory ?? new RecentMemory(config.recentMemoryConfig);
+    this.memoryExtractor =
+      config.memoryExtractor ??
+      (config.llmProvider === undefined
+        ? undefined
+        : new MemoryExtractor({
+            llmProvider: config.llmProvider,
+            memoryStore: this.memoryStore,
+            ...config.memoryExtractorConfig,
+          }));
   }
 
   public get store(): MemoryStore {
@@ -44,6 +63,16 @@ export class MemoryManager {
       role: message.role,
       content,
     });
+  }
+
+  public async finalizeSession(
+    messages: LlmMessage[],
+  ): Promise<MemoryExtraction | null> {
+    if (this.memoryExtractor === undefined) {
+      return null;
+    }
+
+    return this.memoryExtractor.summarizeAndStore(messages);
   }
 
   public close(): void {

@@ -26,7 +26,11 @@ export class Gateway {
     this.session = new Session(config.sessionConfig);
     this.toolRouter = new ToolRouter();
     this.memoryManager =
-      config.memoryManager ?? new MemoryManager(config.memoryManagerConfig);
+      config.memoryManager ??
+      new MemoryManager({
+        ...config.memoryManagerConfig,
+        llmProvider: this.llmProvider,
+      });
   }
 
   public get tools(): ToolRouter {
@@ -98,12 +102,26 @@ export class Gateway {
     await this.memoryManager.recordMessage(this.session.id, assistantEntry);
   }
 
-  public resetSession(): void {
-    this.session.clear();
+  public async resetSession(): Promise<void> {
+    await this.finalizeSession();
   }
 
   public close(): void {
     this.memoryManager.close();
+  }
+
+  public async finalizeSession(): Promise<void> {
+    const history = this.session.getHistory();
+
+    if (history.length === 0) {
+      return;
+    }
+
+    try {
+      await this.memoryManager.finalizeSession(history);
+    } finally {
+      this.session.clear();
+    }
   }
 
   private hasToolCalls(

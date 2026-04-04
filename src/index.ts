@@ -69,6 +69,13 @@ async function main(): Promise<void> {
       }
     }
   } finally {
+    try {
+      await gateway.finalizeSession();
+    } catch (error: unknown) {
+      console.error(`Memory finalization failed: ${toErrorMessage(error)}`);
+    }
+
+    gateway.close();
     rl.close();
   }
 }
