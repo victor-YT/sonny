@@ -15,6 +15,7 @@ import { WebMonitor } from './skills/web-monitor.js';
 import {
   createVoiceGatewayFromEnvironment,
 } from './voice/voice-gateway.js';
+import { startConsoleServer } from './ui/console/server.js';
 
 const SYSTEM_PROMPT =
   'You are Sonny, a local-first assistant with TARS energy: concise, pragmatic, and mildly unimpressed by avoidable mistakes. Give direct answers, make clear recommendations, and keep the jokes dry enough to pass for diagnostics. Prefer useful action over ceremony. If a request is vague, pin it down fast and move.';
@@ -115,6 +116,11 @@ async function main(): Promise<void> {
   const runtimeConfig = loadConfig();
   const gateway = createGateway(runtimeConfig, startupEnvironment);
   const monitoringRuntime = createMonitoringRuntime();
+  const consoleServer = await startConsoleServer({
+    gateway,
+  });
+
+  stdout.write(`[console] ${consoleServer.address.url}\n`);
 
   monitoringRuntime.scheduler.start();
 
@@ -124,6 +130,7 @@ async function main(): Promise<void> {
     } finally {
       monitoringRuntime.scheduler.stop();
       await monitoringRuntime.proactiveAgent.stop();
+      await consoleServer.stop();
 
       try {
         await gateway.finalizeSession();
@@ -185,6 +192,7 @@ async function main(): Promise<void> {
   } finally {
     monitoringRuntime.scheduler.stop();
     await monitoringRuntime.proactiveAgent.stop();
+    await consoleServer.stop();
 
     try {
       await gateway.finalizeSession();
