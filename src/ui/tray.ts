@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { type NativeImage, Tray, nativeImage } from 'electron';
 
 export type TrayStatus = 'idle' | 'listening' | 'thinking' | 'speaking';
@@ -10,6 +14,8 @@ interface StatusStyle {
 
 const ICON_WIDTH = 20;
 const ICON_HEIGHT = 20;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const STATUS_STYLES: Record<TrayStatus, StatusStyle> = {
   idle: {
@@ -53,7 +59,13 @@ export class TrayController {
       return this.tray;
     }
 
-    this.tray = new Tray(this.createImage(this.status));
+    const image = this.createImage(this.status);
+
+    console.log(
+      `[tray] creating tray for status=${this.status} imageEmpty=${image.isEmpty()}`,
+    );
+
+    this.tray = new Tray(image);
     this.applyStatus(this.status);
 
     return this.tray;
@@ -103,17 +115,67 @@ export class TrayController {
   }
 
   private createImage(status: TrayStatus): NativeImage {
+    const iconPath = this.resolveIconPath();
+
+    if (iconPath !== undefined) {
+      const fileImage = nativeImage.createFromPath(iconPath);
+
+      console.log(
+        `[tray] using icon file at ${iconPath} imageEmpty=${fileImage.isEmpty()}`,
+      );
+
+      if (!fileImage.isEmpty()) {
+        fileImage.setTemplateImage(true);
+        return fileImage.resize({
+          width: ICON_WIDTH,
+          height: ICON_HEIGHT,
+        });
+      }
+    }
+
     const style = STATUS_STYLES[status];
     const svg = `
       <svg xmlns="http://www.w3.org/2000/svg" width="${ICON_WIDTH}" height="${ICON_HEIGHT}" viewBox="0 0 ${ICON_WIDTH} ${ICON_HEIGHT}">
-        <rect x="1.5" y="4" width="17" height="12" rx="6" fill="${style.background}" />
-        <circle cx="6.5" cy="10" r="2.5" fill="${style.foreground}" />
-        <rect x="10" y="8.5" width="5" height="3" rx="1.5" fill="${style.foreground}" opacity="0.88" />
+        <rect x="1.5" y="4" width="17" height="12" rx="6" fill="#111827" />
+        <circle cx="6.5" cy="10" r="2.5" fill="#ffffff" />
+        <rect x="10" y="8.5" width="5" height="3" rx="1.5" fill="#ffffff" opacity="0.92" />
       </svg>
     `.trim();
-
-    return nativeImage.createFromDataURL(
+    const image = nativeImage.createFromDataURL(
       `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
     );
+
+    image.setTemplateImage(true);
+
+    console.log(
+      `[tray] no tray icon file found, using generated fallback for status=${status} expectedPaths=${this.getExpectedIconPaths().join(', ')}`,
+    );
+
+    return image;
+  }
+
+  private resolveIconPath(): string | undefined {
+    for (const iconPath of this.getExpectedIconPaths()) {
+      const exists = existsSync(iconPath);
+
+      console.log(`[tray] checked icon path ${iconPath} exists=${exists}`);
+
+      if (exists) {
+        return iconPath;
+      }
+    }
+
+    return undefined;
+  }
+
+  private getExpectedIconPaths(): string[] {
+    return [
+      join(__dirname, 'assets', 'tray-iconTemplate.png'),
+      join(__dirname, 'assets', 'tray-icon.png'),
+      join(process.cwd(), 'dist', 'ui', 'assets', 'tray-iconTemplate.png'),
+      join(process.cwd(), 'dist', 'ui', 'assets', 'tray-icon.png'),
+      join(process.cwd(), 'src', 'ui', 'assets', 'tray-iconTemplate.png'),
+      join(process.cwd(), 'src', 'ui', 'assets', 'tray-icon.png'),
+    ];
   }
 }
