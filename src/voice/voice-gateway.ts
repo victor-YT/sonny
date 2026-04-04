@@ -1,18 +1,17 @@
+import { loadConfig, type RuntimeConfig } from '../core/config.js';
+import type { Gateway } from '../core/gateway.js';
 import { StreamingAudioQueue } from './streaming-audio-queue.js';
 import { Microphone, type MicrophoneConfig } from './microphone.js';
-import { ChatterboxProvider } from './providers/chatterbox.js';
-import { FasterWhisperProvider } from './providers/faster-whisper.js';
-import { PorcupineProvider } from './providers/porcupine.js';
 import type { SttOptions, SttProvider } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type { WakeWordProvider } from './providers/wake-word.js';
 import { Speaker, type SpeakerConfig } from './speaker.js';
 import { VoiceManager } from './voice-manager.js';
-import type { Gateway } from '../core/gateway.js';
 
 export interface VoiceGatewayConfig {
   gateway: Gateway;
-  wakeWordProvider: WakeWordProvider;
+  runtimeConfig?: RuntimeConfig;
+  wakeWordProvider?: WakeWordProvider;
   sttProvider?: SttProvider;
   ttsProvider?: TtsProvider;
   microphone?: Microphone;
@@ -27,7 +26,7 @@ export interface VoiceGatewayConfig {
 export interface VoiceEnvironmentConfig {
   ollamaBaseUrl?: string;
   ollamaModel?: string;
-  porcupineAccessKey: string;
+  porcupineAccessKey?: string;
   wakeWords?: string[];
   porcupineModelPath?: string;
   wakeWordSensitivity?: number;
@@ -49,20 +48,21 @@ export class VoiceGateway {
   public readonly playbackQueue: StreamingAudioQueue;
 
   public constructor(config: VoiceGatewayConfig) {
+    const runtimeConfig = this.resolveRuntimeConfig(config);
+
     this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
     this.microphone = config.microphone ?? new Microphone(config.microphoneConfig);
     this.speaker = config.speaker ?? new Speaker({
       audioQueue: this.playbackQueue,
       ...config.speakerConfig,
     });
-    const sttProvider = config.sttProvider ?? new FasterWhisperProvider();
-    const ttsProvider = config.ttsProvider ?? new ChatterboxProvider();
 
     this.manager = new VoiceManager({
       gateway: config.gateway,
+      runtimeConfig,
       wakeWordProvider: config.wakeWordProvider,
-      sttProvider,
-      ttsProvider,
+      sttProvider: config.sttProvider,
+      ttsProvider: config.ttsProvider,
       captureAudio: async () => this.microphone.capture(),
       defaultSttOptions: config.defaultSttOptions,
       defaultTtsOptions: config.defaultTtsOptions,
@@ -78,30 +78,56 @@ export class VoiceGateway {
   public async stop(): Promise<void> {
     await this.manager.stop();
   }
+
+  private resolveRuntimeConfig(
+    config: VoiceGatewayConfig,
+  ): RuntimeConfig | undefined {
+    if (config.runtimeConfig !== undefined) {
+      return config.runtimeConfig;
+    }
+
+    if (
+      config.sttProvider === undefined ||
+      config.ttsProvider === undefined ||
+      config.wakeWordProvider === undefined
+    ) {
+      return loadConfig();
+    }
+
+    return undefined;
+  }
 }
 
 export function createVoiceGatewayFromEnvironment(
   gateway: Gateway,
   environment: NodeJS.ProcessEnv = process.env,
 ): VoiceGateway {
+  const runtimeConfig = loadConfig();
   const config = readVoiceEnvironmentConfig(environment);
-  const wakeWordProvider = new PorcupineProvider({
-    accessKey: config.porcupineAccessKey,
-    keywords: config.wakeWords ?? ['sonny'],
-    modelPath: config.porcupineModelPath,
-    sensitivity: config.wakeWordSensitivity,
-    audioDeviceIndex: config.audioDeviceIndex,
-  });
 
   return new VoiceGateway({
     gateway,
-    wakeWordProvider,
-    sttProvider: new FasterWhisperProvider({
-      baseUrl: config.sttBaseUrl,
-    }),
-    ttsProvider: new ChatterboxProvider({
-      baseUrl: config.ttsBaseUrl,
-    }),
+    runtimeConfig: {
+      ...runtimeConfig,
+      ollama: {
+        baseUrl: config.ollamaBaseUrl ?? runtimeConfig.ollama.baseUrl,
+        model: config.ollamaModel ?? runtimeConfig.ollama.model,
+      },
+      voice: {
+        fasterWhisper: {
+          url: config.sttBaseUrl ?? runtimeConfig.voice.fasterWhisper.url,
+        },
+        chatterbox: {
+          url: config.ttsBaseUrl ?? runtimeConfig.voice.chatterbox.url,
+        },
+        porcupine: {
+          accessKey:
+            config.porcupineAccessKey ?? runtimeConfig.voice.porcupine.accessKey,
+          wakeWord:
+            config.wakeWords?.[0] ?? runtimeConfig.voice.porcupine.wakeWord,
+        },
+      },
+    },
     microphoneConfig: {
       sampleRateHertz: config.micSampleRateHertz,
       silenceSeconds: config.micSilenceSeconds,
@@ -120,16 +146,6 @@ export function createVoiceGatewayFromEnvironment(
 export function readVoiceEnvironmentConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): VoiceEnvironmentConfig {
-  const porcupineAccessKey =
-    environment.PORCUPINE_ACCESS_KEY ??
-    environment.SONNY_PORCUPINE_ACCESS_KEY;
-
-  if (porcupineAccessKey === undefined || porcupineAccessKey.length === 0) {
-    throw new Error(
-      'Voice mode requires PORCUPINE_ACCESS_KEY or SONNY_PORCUPINE_ACCESS_KEY.',
-    );
-  }
-
   return {
     ollamaBaseUrl:
       environment.OLLAMA_BASE_URL ??
@@ -137,7 +153,9 @@ export function readVoiceEnvironmentConfig(
     ollamaModel:
       environment.OLLAMA_MODEL ??
       environment.SONNY_OLLAMA_MODEL,
-    porcupineAccessKey,
+    porcupineAccessKey:
+      environment.PORCUPINE_ACCESS_KEY ??
+      environment.SONNY_PORCUPINE_ACCESS_KEY,
     wakeWords: parseWakeWords(environment.SONNY_WAKE_WORDS),
     porcupineModelPath: environment.SONNY_PORCUPINE_MODEL_PATH,
     wakeWordSensitivity: parseOptionalNumber(environment.SONNY_WAKE_WORD_SENSITIVITY),

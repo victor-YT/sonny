@@ -20,10 +20,25 @@
   },
   "skills": {
     "permissions": {
+      "file.tool": {
+        "enabled": true,
+        "defaultLevel": "low",
+        "maxLevel": "low"
+      },
       "sandbox.execute": {
         "enabled": true,
         "defaultLevel": "low",
         "maxLevel": "high"
+      },
+      "shell.tool": {
+        "enabled": true,
+        "defaultLevel": "low",
+        "maxLevel": "high"
+      },
+      "web.search": {
+        "enabled": true,
+        "defaultLevel": "low",
+        "maxLevel": "low"
       }
     }
   }

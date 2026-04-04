@@ -1,4 +1,4 @@
-import type { RuntimeConfig } from './config.js';
+import { loadConfig, type RuntimeConfig } from './config.js';
 import type {
   LlmMessage,
   LlmProvider,
@@ -34,15 +34,17 @@ export class Gateway {
   private readonly memoryManager: MemoryManager;
   private readonly promptBuilder: PromptBuilder;
   private readonly skillRegistry: SkillRegistry;
+  private readonly runtimeConfig: RuntimeConfig | undefined;
 
   public constructor(config: GatewayConfig) {
-    this.llmProvider = this.createLlmProvider(config);
+    this.runtimeConfig = this.resolveRuntimeConfig(config);
+    this.llmProvider = this.createLlmProvider(config, this.runtimeConfig);
     this.session = new Session(config.sessionConfig);
     this.toolRouter = new ToolRouter();
     this.memoryManager =
       config.memoryManager ??
       new MemoryManager({
-        ...this.createMemoryManagerConfig(config),
+        ...this.createMemoryManagerConfig(config, this.runtimeConfig),
         llmProvider: this.llmProvider,
       });
     this.promptBuilder =
@@ -52,7 +54,7 @@ export class Gateway {
       });
     this.skillRegistry =
       config.skillRegistry ??
-      new SkillRegistry(config.skillRegistryConfig);
+      new SkillRegistry(this.createSkillRegistryConfig(config, this.runtimeConfig));
     this.skillRegistry.attachToRouter(this.toolRouter);
   }
 
@@ -156,15 +158,34 @@ export class Gateway {
     }
   }
 
-  private createLlmProvider(config: GatewayConfig): LlmProvider {
+  private resolveRuntimeConfig(config: GatewayConfig): RuntimeConfig | undefined {
+    if (config.runtimeConfig !== undefined) {
+      return config.runtimeConfig;
+    }
+
+    if (
+      config.llmProvider === undefined ||
+      config.memoryManager === undefined ||
+      config.skillRegistry === undefined
+    ) {
+      return loadConfig();
+    }
+
+    return undefined;
+  }
+
+  private createLlmProvider(
+    config: GatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): LlmProvider {
     if (config.llmProvider !== undefined) {
       return config.llmProvider;
     }
 
-    if (config.runtimeConfig !== undefined) {
+    if (runtimeConfig !== undefined) {
       return new OllamaProvider({
-        baseUrl: config.runtimeConfig.ollama.baseUrl,
-        model: config.runtimeConfig.ollama.model,
+        baseUrl: runtimeConfig.ollama.baseUrl,
+        model: runtimeConfig.ollama.model,
       });
     }
 
@@ -173,9 +194,11 @@ export class Gateway {
     );
   }
 
-  private createMemoryManagerConfig(config: GatewayConfig): MemoryManagerConfig {
+  private createMemoryManagerConfig(
+    config: GatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): MemoryManagerConfig {
     const memoryManagerConfig = config.memoryManagerConfig ?? {};
-    const runtimeConfig = config.runtimeConfig;
 
     if (runtimeConfig === undefined) {
       return memoryManagerConfig;
@@ -189,6 +212,17 @@ export class Gateway {
           runtimeConfig.memory.retentionDays,
         ...memoryManagerConfig.recentMemoryConfig,
       },
+    };
+  }
+
+  private createSkillRegistryConfig(
+    config: GatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): SkillRegistryConfig {
+    return {
+      ...config.skillRegistryConfig,
+      runtimeConfig:
+        config.skillRegistryConfig?.runtimeConfig ?? runtimeConfig,
     };
   }
 

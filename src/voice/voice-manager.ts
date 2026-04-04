@@ -1,4 +1,8 @@
+import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import { Gateway } from '../core/gateway.js';
+import { ChatterboxProvider } from './providers/chatterbox.js';
+import { FasterWhisperProvider } from './providers/faster-whisper.js';
+import { PorcupineProvider } from './providers/porcupine.js';
 import type { SttOptions, SttProvider, SttResult } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type {
@@ -9,6 +13,7 @@ import type {
 import {
   ResponseProcessor,
   type ProcessedVoiceResponse,
+  type ProcessedVoiceSentence,
 } from './response-processor.js';
 import type { Speaker, SpeakerListener } from './speaker.js';
 import {
@@ -71,8 +76,9 @@ export type VoiceManagerListener = (event: VoiceManagerEvent) => void;
 
 export interface VoiceManagerConfig {
   gateway: Gateway;
-  sttProvider: SttProvider;
-  ttsProvider: TtsProvider;
+  runtimeConfig?: RuntimeConfig;
+  sttProvider?: SttProvider;
+  ttsProvider?: TtsProvider;
   wakeWordProvider?: WakeWordProvider;
   captureAudio?: (event: WakeWordEvent) => Promise<Buffer | VoiceCaptureResult>;
   defaultSttOptions?: SttOptions;
@@ -104,10 +110,12 @@ export class VoiceManager {
   private started = false;
 
   public constructor(config: VoiceManagerConfig) {
+    const runtimeConfig = this.resolveRuntimeConfig(config);
+
     this.gateway = config.gateway;
-    this.sttProvider = config.sttProvider;
-    this.ttsProvider = config.ttsProvider;
-    this.wakeWordProvider = config.wakeWordProvider;
+    this.sttProvider = this.createSttProvider(config, runtimeConfig);
+    this.ttsProvider = this.createTtsProvider(config, runtimeConfig);
+    this.wakeWordProvider = this.createWakeWordProvider(config, runtimeConfig);
     this.captureAudio = config.captureAudio;
     this.defaultSttOptions = config.defaultSttOptions ?? {};
     this.defaultTtsOptions = config.defaultTtsOptions ?? {};
@@ -126,6 +134,77 @@ export class VoiceManager {
       this.handlePlaybackQueueEvent(event);
     });
     this.speakerListener && this.speaker?.onEvent(this.speakerListener);
+  }
+
+  private resolveRuntimeConfig(config: VoiceManagerConfig): RuntimeConfig | undefined {
+    if (config.runtimeConfig !== undefined) {
+      return config.runtimeConfig;
+    }
+
+    if (
+      config.sttProvider === undefined ||
+      config.ttsProvider === undefined
+    ) {
+      return loadConfig();
+    }
+
+    return undefined;
+  }
+
+  private createSttProvider(
+    config: VoiceManagerConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): SttProvider {
+    if (config.sttProvider !== undefined) {
+      return config.sttProvider;
+    }
+
+    if (runtimeConfig !== undefined) {
+      return new FasterWhisperProvider({
+        baseUrl: runtimeConfig.voice.fasterWhisper.url,
+      });
+    }
+
+    throw new Error(
+      'Voice manager requires either sttProvider or runtimeConfig to initialize.',
+    );
+  }
+
+  private createTtsProvider(
+    config: VoiceManagerConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): TtsProvider {
+    if (config.ttsProvider !== undefined) {
+      return config.ttsProvider;
+    }
+
+    if (runtimeConfig !== undefined) {
+      return new ChatterboxProvider({
+        baseUrl: runtimeConfig.voice.chatterbox.url,
+      });
+    }
+
+    throw new Error(
+      'Voice manager requires either ttsProvider or runtimeConfig to initialize.',
+    );
+  }
+
+  private createWakeWordProvider(
+    config: VoiceManagerConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): WakeWordProvider | undefined {
+    if (config.wakeWordProvider !== undefined) {
+      return config.wakeWordProvider;
+    }
+
+    if (runtimeConfig === undefined) {
+      return undefined;
+    }
+
+    return new PorcupineProvider({
+      accessKey: runtimeConfig.voice.porcupine.accessKey,
+      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+    });
   }
 
   public get currentState(): VoiceManagerState {
@@ -391,65 +470,75 @@ export class VoiceManager {
     options: TtsOptions,
   ): Promise<Buffer> {
     const resolvedOptions = this.resolveTtsOptions(response, options);
-
-    if (
-      this.ttsProvider.supportsStreaming &&
-      this.ttsProvider.streamSynthesize !== undefined
-    ) {
-      const sourceStream = this.streamProcessedResponse(response, resolvedOptions);
-      const collectedStream = this.createCollectedStream(sourceStream);
-
-      this.playbackQueue.enqueueStream(collectedStream.stream, {
-        text: response.plainText,
-        voice: resolvedOptions.voice,
-      });
-
-      return collectedStream.completed;
-    }
-
-    const audio = await this.ttsProvider.synthesize(
-      response.taggedText,
-      resolvedOptions,
-    );
-
-    this.playbackQueue.enqueue(audio, {
-      text: response.plainText,
-      voice: resolvedOptions.voice,
-    });
-
-    return audio;
-  }
-
-  private async *streamProcessedResponse(
-    response: ProcessedVoiceResponse,
-    options: TtsOptions,
-  ): AsyncIterable<Buffer> {
-    const streamSynthesize = this.ttsProvider.streamSynthesize;
-
-    if (streamSynthesize === undefined) {
-      throw new Error('Streaming synthesis is unavailable');
-    }
-
-    const sentences = response.sentences.length > 0
-      ? response.sentences
-      : [
-          {
-            index: 0,
-            text: response.plainText,
-            taggedText: response.taggedText,
-            emotion: response.emotion.primary,
-          },
-        ];
+    const sentences = this.getPlayableSentences(response);
+    const audioChunks: Buffer[] = [];
 
     for (const sentence of sentences) {
       if (sentence.taggedText.trim().length === 0) {
         continue;
       }
 
-      for await (const chunk of streamSynthesize(sentence.taggedText, options)) {
-        yield chunk;
-      }
+      const audio = await this.synthesizeSentenceForPlayback(
+        sentence,
+        resolvedOptions,
+      );
+      audioChunks.push(audio);
     }
+
+    return Buffer.concat(audioChunks);
+  }
+
+  private getPlayableSentences(
+    response: ProcessedVoiceResponse,
+  ): ProcessedVoiceSentence[] {
+    if (response.sentences.length > 0) {
+      return response.sentences;
+    }
+
+    if (response.taggedText.trim().length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        index: 0,
+        text: response.plainText,
+        taggedText: response.taggedText,
+        emotion: response.emotion.primary,
+      },
+    ];
+  }
+
+  private async synthesizeSentenceForPlayback(
+    sentence: ProcessedVoiceSentence,
+    options: TtsOptions,
+  ): Promise<Buffer> {
+    if (
+      this.ttsProvider.supportsStreaming &&
+      this.ttsProvider.streamSynthesize !== undefined
+    ) {
+      const sourceStream = this.ttsProvider.streamSynthesize(
+        sentence.taggedText,
+        options,
+      );
+      const collectedStream = this.createCollectedStream(sourceStream);
+
+      this.playbackQueue.enqueueStream(collectedStream.stream, {
+        text: sentence.text,
+        voice: options.voice,
+      });
+
+      return collectedStream.completed;
+    }
+
+    const audio = await this.ttsProvider.synthesize(sentence.taggedText, options);
+
+    this.playbackQueue.enqueue(audio, {
+      text: sentence.text,
+      voice: options.voice,
+    });
+
+    return audio;
   }
 
   private resolveTtsOptions(
@@ -458,7 +547,8 @@ export class VoiceManager {
   ): TtsOptions {
     return {
       ...options,
-      exaggeration: options.exaggeration ?? response.emotion.exaggeration,
+      exaggeration:
+        options.exaggeration ?? response.emotion.chatterboxExaggeration,
     };
   }
 

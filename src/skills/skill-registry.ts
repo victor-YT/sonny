@@ -1,9 +1,25 @@
+import type {
+  RuntimeConfig,
+  SkillPermissionConfig,
+} from '../core/config.js';
 import type { ToolDefinition } from '../core/providers/llm.js';
 import type { ToolRouter } from '../core/tool-router.js';
 import { FileToolSkill, type FileToolSkillConfig } from './file-tool.js';
+import {
+  createPermissionRequirement,
+  evaluatePermission,
+  permissionDeniedResponse,
+  type PermissionLevel,
+} from './permissions.js';
 import { SandboxSkill } from './sandbox.js';
 import { ShellToolSkill, type ShellToolSkillConfig } from './shell-tool.js';
 import { WebSearchSkill } from './web-search.js';
+
+const PERMISSION_ORDER: Record<PermissionLevel, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
 
 export interface BuiltInSkill {
   readonly definition: ToolDefinition;
@@ -11,6 +27,8 @@ export interface BuiltInSkill {
 }
 
 export interface SkillRegistryConfig {
+  runtimeConfig?: RuntimeConfig;
+  permissions?: Record<string, SkillPermissionConfig>;
   allowedPaths?: string[];
   baseDirectory?: string;
   fileTool?: Omit<FileToolSkillConfig, 'allowedPaths' | 'baseDirectory'>;
@@ -25,9 +43,14 @@ export interface SkillSummary {
 
 export class SkillRegistry {
   private readonly skills: Map<string, BuiltInSkill>;
+  private readonly permissions: Record<string, SkillPermissionConfig>;
 
   public constructor(config: SkillRegistryConfig = {}) {
     this.skills = new Map<string, BuiltInSkill>();
+    this.permissions =
+      config.permissions ??
+      config.runtimeConfig?.skills.permissions ??
+      {};
 
     const skills = config.skills ?? this.createDefaultSkills(config);
 
@@ -65,8 +88,76 @@ export class SkillRegistry {
 
   public attachToRouter(toolRouter: ToolRouter): void {
     for (const skill of this.skills.values()) {
-      toolRouter.register(skill.definition, (args) => skill.execute(args));
+      toolRouter.register(skill.definition, (args) => this.executeSkill(skill, args));
     }
+  }
+
+  private async executeSkill(
+    skill: BuiltInSkill,
+    args: Record<string, unknown>,
+  ): Promise<string> {
+    const permissionConfig = this.permissions[skill.definition.name];
+
+    if (permissionConfig === undefined) {
+      return skill.execute(args);
+    }
+
+    if (!permissionConfig.enabled) {
+      return JSON.stringify({
+        status: 'permission_denied',
+        tool: skill.definition.name,
+        message: `${skill.definition.name} is disabled by runtime config.`,
+      });
+    }
+
+    const requestedLevel = this.resolveRequestedLevel(args, permissionConfig);
+
+    if (PERMISSION_ORDER[requestedLevel] > PERMISSION_ORDER[permissionConfig.maxLevel]) {
+      return JSON.stringify({
+        status: 'permission_denied',
+        tool: skill.definition.name,
+        message:
+          `${skill.definition.name} requested ${requestedLevel} permission, ` +
+          `but runtime config limits it to ${permissionConfig.maxLevel}.`,
+      });
+    }
+
+    const effectiveArgs =
+      args.permissionLevel === undefined
+        ? { ...args, permissionLevel: requestedLevel }
+        : args;
+    const permission = createPermissionRequirement(
+      requestedLevel,
+      `${skill.definition.name} is configured at ${requestedLevel} risk in runtime config.`,
+    );
+    const permissionCheck = evaluatePermission(
+      skill.definition.name,
+      permission,
+      effectiveArgs,
+    );
+
+    if (!permissionCheck.approved) {
+      return permissionDeniedResponse(
+        skill.definition.name,
+        permission,
+        permissionCheck.message ?? 'Confirmation required.',
+      );
+    }
+
+    return skill.execute(effectiveArgs);
+  }
+
+  private resolveRequestedLevel(
+    args: Record<string, unknown>,
+    permissionConfig: SkillPermissionConfig,
+  ): PermissionLevel {
+    const value = args.permissionLevel;
+
+    if (value === 'low' || value === 'medium' || value === 'high') {
+      return value;
+    }
+
+    return permissionConfig.defaultLevel;
   }
 
   private createDefaultSkills(config: SkillRegistryConfig): BuiltInSkill[] {
