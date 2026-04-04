@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "id": "morning-briefing",
+      "title": "Morning Briefing",
+      "schedule": "0 8 * * *",
+      "prompt": "Prepare a concise morning briefing with the most important priorities, any recent monitor changes, and the next actions that need attention.",
+      "enabled": true
+    },
+    {
+      "id": "daily-summary",
+      "title": "Daily Summary",
+      "schedule": "0 18 * * *",
+      "prompt": "Prepare a short end-of-day summary covering what changed, what is still open, and the highest-priority follow-up for tomorrow.",
+      "enabled": true
+    }
+  ]
+}
