@@ -5,13 +5,19 @@ import type { Server as HttpServer } from 'node:http';
 
 import express, { type Express } from 'express';
 
+import {
+  createConsoleApiRuntime,
+  type ConsoleApiRuntime,
+  type ConsoleApiConfig,
+} from './api.js';
+
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export interface ConsoleServerConfig {
+export interface ConsoleServerConfig extends ConsoleApiConfig {
   host?: string;
   port?: number;
   publicDirectory?: string;
@@ -28,6 +34,7 @@ export class ConsoleServer {
   private readonly port: number;
   private readonly publicDirectory: string;
   private readonly app: Express;
+  private readonly apiRuntime: ConsoleApiRuntime;
   private server: HttpServer | undefined;
 
   public constructor(config: ConsoleServerConfig = {}) {
@@ -36,6 +43,7 @@ export class ConsoleServer {
     this.publicDirectory =
       config.publicDirectory ?? join(__dirname, 'public');
     this.app = express();
+    this.apiRuntime = createConsoleApiRuntime(config);
 
     this.configure();
   }
@@ -75,6 +83,8 @@ export class ConsoleServer {
         resolve();
       });
     });
+
+    this.apiRuntime.close();
   }
 
   public get expressApp(): Express {
@@ -92,6 +102,7 @@ export class ConsoleServer {
   private configure(): void {
     this.app.disable('x-powered-by');
     this.app.use(express.json());
+    this.app.use('/api', this.apiRuntime.router);
 
     if (existsSync(this.publicDirectory)) {
       this.app.use(express.static(this.publicDirectory));

@@ -1,0 +1,30 @@
+{
+  "ollama": {
+    "baseUrl": "http://localhost:11434",
+    "model": "qwen3:8b"
+  },
+  "voice": {
+    "fasterWhisper": {
+      "url": "http://127.0.0.1:8000"
+    },
+    "chatterbox": {
+      "url": "http://127.0.0.1:8001"
+    },
+    "porcupine": {
+      "accessKey": "test-access-key",
+      "wakeWord": "sonny"
+    }
+  },
+  "memory": {
+    "retentionDays": 7
+  },
+  "skills": {
+    "permissions": {
+      "sandbox.execute": {
+        "enabled": true,
+        "defaultLevel": "low",
+        "maxLevel": "high"
+      }
+    }
+  }
+}
