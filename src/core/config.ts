@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { PermissionLevel } from '../skills/permissions.js';
+import { ConfigValidationError, validateConfig } from './config-validator.js';
 
 export interface OllamaRuntimeConfig {
   baseUrl: string;
@@ -67,6 +68,20 @@ export function loadConfigFile(configPath: string = DEFAULT_CONFIG_PATH): unknow
     throw new Error(
       `Runtime config at ${configPath} is not valid JSON: ${toErrorMessage(error)}`,
     );
+  }
+}
+
+export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): RuntimeConfig {
+  const rawConfig = loadConfigFile(configPath);
+
+  try {
+    return validateConfig(rawConfig);
+  } catch (error: unknown) {
+    if (error instanceof ConfigValidationError) {
+      throw new Error(`Runtime config at ${configPath} is invalid.\n${error.message}`);
+    }
+
+    throw error;
   }
 }
 
