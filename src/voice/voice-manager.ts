@@ -6,6 +6,7 @@ import type {
   WakeWordListener,
   WakeWordProvider,
 } from './providers/wake-word.js';
+import type { Speaker, SpeakerListener } from './speaker.js';
 import {
   StreamingAudioQueue,
   type StreamingAudioQueueEvent,
@@ -73,6 +74,7 @@ export interface VoiceManagerConfig {
   defaultSttOptions?: SttOptions;
   defaultTtsOptions?: TtsOptions;
   playbackQueue?: StreamingAudioQueue;
+  speaker?: Speaker;
 }
 
 export class VoiceManager {
@@ -86,8 +88,10 @@ export class VoiceManager {
   private readonly defaultSttOptions: SttOptions;
   private readonly defaultTtsOptions: TtsOptions;
   private readonly playbackQueue: StreamingAudioQueue;
+  private readonly speaker: Speaker | undefined;
   private readonly listeners = new Set<VoiceManagerListener>();
   private readonly wakeWordListener: WakeWordListener;
+  private readonly speakerListener: SpeakerListener | undefined;
 
   private state: VoiceManagerState = 'idle';
   private pipelineTask: Promise<VoiceInteractionResult> | undefined;
@@ -102,12 +106,19 @@ export class VoiceManager {
     this.defaultSttOptions = config.defaultSttOptions ?? {};
     this.defaultTtsOptions = config.defaultTtsOptions ?? {};
     this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
+    this.speaker = config.speaker;
     this.wakeWordListener = (event) => {
       void this.handleWakeWordEvent(event);
     };
+    this.speakerListener = this.speaker === undefined
+      ? undefined
+      : (event) => {
+          this.handleSpeakerEvent(event);
+        };
     this.playbackQueue.onEvent((event) => {
       this.handlePlaybackQueueEvent(event);
     });
+    this.speakerListener && this.speaker?.onEvent(this.speakerListener);
   }
 
   public get currentState(): VoiceManagerState {
@@ -136,6 +147,7 @@ export class VoiceManager {
     }
 
     this.started = true;
+    this.speaker?.start();
 
     if (this.wakeWordProvider === undefined) {
       this.setState('idle');
@@ -149,6 +161,7 @@ export class VoiceManager {
       this.setState('listening');
     } catch (error: unknown) {
       this.wakeWordProvider.removeListener(this.wakeWordListener);
+      await this.speaker?.stop();
       this.started = false;
       this.handleError(this.toError(error, 'Voice manager failed to start'));
       throw error;
@@ -162,12 +175,15 @@ export class VoiceManager {
 
     this.started = false;
 
-    if (this.wakeWordProvider !== undefined) {
-      this.wakeWordProvider.removeListener(this.wakeWordListener);
-      await this.wakeWordProvider.stop();
+    try {
+      if (this.wakeWordProvider !== undefined) {
+        this.wakeWordProvider.removeListener(this.wakeWordListener);
+        await this.wakeWordProvider.stop();
+      }
+    } finally {
+      await this.speaker?.stop();
+      this.setState('idle');
     }
-
-    this.setState('idle');
   }
 
   public async processAudio(
@@ -466,8 +482,23 @@ export class VoiceManager {
     }
   }
 
+  private handleSpeakerEvent(event: { type: string; error?: Error }): void {
+    if (event.type === 'error' && event.error !== undefined) {
+      this.handleError(event.error);
+      return;
+    }
+
+    if (this.pipelineTask === undefined) {
+      this.setState(this.getRestingState());
+    }
+  }
+
   private getRestingState(): VoiceManagerState {
-    if (this.playbackQueue.isPlaying || this.playbackQueue.pendingItems > 0) {
+    if (
+      this.speaker?.isPlaying === true ||
+      this.playbackQueue.isPlaying ||
+      this.playbackQueue.pendingItems > 0
+    ) {
       return 'playing';
     }
 
