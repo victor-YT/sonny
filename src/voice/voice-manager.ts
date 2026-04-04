@@ -6,6 +6,10 @@ import type {
   WakeWordListener,
   WakeWordProvider,
 } from './providers/wake-word.js';
+import {
+  StreamingAudioQueue,
+  type StreamingAudioQueueEvent,
+} from './streaming-audio-queue.js';
 
 export type VoiceManagerState =
   | 'idle'
@@ -14,6 +18,7 @@ export type VoiceManagerState =
   | 'transcribing'
   | 'thinking'
   | 'synthesizing'
+  | 'playing'
   | 'error';
 
 export type VoiceManagerEventType =
@@ -21,6 +26,7 @@ export type VoiceManagerEventType =
   | 'wake_word_detected'
   | 'transcription'
   | 'response'
+  | 'audio_chunk'
   | 'audio'
   | 'error';
 
@@ -64,6 +70,7 @@ export interface VoiceManagerConfig {
   captureAudio?: (event: WakeWordEvent) => Promise<Buffer | VoiceCaptureResult>;
   defaultSttOptions?: SttOptions;
   defaultTtsOptions?: TtsOptions;
+  playbackQueue?: StreamingAudioQueue;
 }
 
 export class VoiceManager {
@@ -76,6 +83,7 @@ export class VoiceManager {
     | undefined;
   private readonly defaultSttOptions: SttOptions;
   private readonly defaultTtsOptions: TtsOptions;
+  private readonly playbackQueue: StreamingAudioQueue;
   private readonly listeners = new Set<VoiceManagerListener>();
   private readonly wakeWordListener: WakeWordListener;
 
@@ -91,9 +99,13 @@ export class VoiceManager {
     this.captureAudio = config.captureAudio;
     this.defaultSttOptions = config.defaultSttOptions ?? {};
     this.defaultTtsOptions = config.defaultTtsOptions ?? {};
+    this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
     this.wakeWordListener = (event) => {
       void this.handleWakeWordEvent(event);
     };
+    this.playbackQueue.onEvent((event) => {
+      this.handlePlaybackQueueEvent(event);
+    });
   }
 
   public get currentState(): VoiceManagerState {
@@ -102,6 +114,10 @@ export class VoiceManager {
 
   public get isRunning(): boolean {
     return this.started;
+  }
+
+  public get audioQueue(): StreamingAudioQueue {
+    return this.playbackQueue;
   }
 
   public onEvent(listener: VoiceManagerListener): void {
@@ -167,7 +183,7 @@ export class VoiceManager {
       return await task;
     } finally {
       this.pipelineTask = undefined;
-      this.setState(this.wakeWordProvider?.isListening === true ? 'listening' : 'idle');
+      this.setState(this.getRestingState());
     }
   }
 
@@ -175,7 +191,7 @@ export class VoiceManager {
     this.setState('synthesizing');
 
     try {
-      const audio = await this.ttsProvider.synthesize(text, {
+      const audio = await this.synthesizeForPlayback(text, {
         ...this.defaultTtsOptions,
         ...options,
       });
@@ -190,7 +206,7 @@ export class VoiceManager {
       this.handleError(this.toError(error, 'Voice synthesis failed'));
       throw error;
     } finally {
-      this.setState(this.wakeWordProvider?.isListening === true ? 'listening' : 'idle');
+      this.setState(this.getRestingState());
     }
   }
 
@@ -221,7 +237,7 @@ export class VoiceManager {
       });
 
       this.setState('synthesizing');
-      const spokenAudio = await this.ttsProvider.synthesize(response, {
+      const spokenAudio = await this.synthesizeForPlayback(response, {
         ...this.defaultTtsOptions,
         ...options.tts,
       });
@@ -295,6 +311,119 @@ export class VoiceManager {
     }
 
     return result;
+  }
+
+  private async synthesizeForPlayback(
+    text: string,
+    options: TtsOptions,
+  ): Promise<Buffer> {
+    if (
+      this.ttsProvider.supportsStreaming &&
+      this.ttsProvider.streamSynthesize !== undefined
+    ) {
+      const sourceStream = this.ttsProvider.streamSynthesize(text, options);
+      const collectedStream = this.createCollectedStream(sourceStream);
+
+      this.playbackQueue.enqueueStream(collectedStream.stream, {
+        text,
+        voice: options.voice,
+      });
+
+      return collectedStream.completed;
+    }
+
+    const audio = await this.ttsProvider.synthesize(text, options);
+
+    this.playbackQueue.enqueue(audio, {
+      text,
+      voice: options.voice,
+    });
+
+    return audio;
+  }
+
+  private createCollectedStream(
+    source: AsyncIterable<Buffer>,
+  ): { stream: AsyncIterable<Buffer>; completed: Promise<Buffer> } {
+    const chunks: Buffer[] = [];
+    let resolveCompleted: ((audio: Buffer) => void) | undefined;
+    let rejectCompleted: ((error: Error) => void) | undefined;
+    const completed = new Promise<Buffer>((resolve, reject) => {
+      resolveCompleted = resolve;
+      rejectCompleted = (error) => {
+        reject(error);
+      };
+    });
+
+    return {
+      stream: this.collectStream(
+        source,
+        chunks,
+        (audio) => {
+          resolveCompleted?.(audio);
+        },
+        (error) => {
+          rejectCompleted?.(error);
+        },
+      ),
+      completed,
+    };
+  }
+
+  private async *collectStream(
+    source: AsyncIterable<Buffer>,
+    chunks: Buffer[],
+    resolveCompleted: (audio: Buffer) => void,
+    rejectCompleted: (error: Error) => void,
+  ): AsyncIterable<Buffer> {
+    try {
+      for await (const chunk of source) {
+        chunks.push(chunk);
+        yield chunk;
+      }
+
+      resolveCompleted(Buffer.concat(chunks));
+    } catch (error: unknown) {
+      const streamingError = this.toError(error, 'Streaming synthesis failed');
+
+      rejectCompleted(streamingError);
+      throw streamingError;
+    }
+  }
+
+  private handlePlaybackQueueEvent(event: StreamingAudioQueueEvent): void {
+    if (event.type === 'item_started') {
+      this.setState('playing');
+      return;
+    }
+
+    if (event.type === 'chunk' && event.chunk !== undefined) {
+      this.emit({
+        type: 'audio_chunk',
+        audio: event.chunk,
+      });
+      return;
+    }
+
+    if (event.type === 'error' && event.error !== undefined) {
+      this.handleError(event.error);
+      return;
+    }
+
+    if (
+      event.type === 'queue_drained' &&
+      this.pipelineTask === undefined
+    ) {
+      this.setState(this.getRestingState());
+    }
+  }
+
+  private getRestingState(): VoiceManagerState {
+    if (this.playbackQueue.isPlaying || this.playbackQueue.pendingItems > 0) {
+      return 'playing';
+    }
+
+    return this.wakeWordProvider?.isListening === true ? 'listening' : 'idle';
   }
 
   private setState(state: VoiceManagerState): void {
