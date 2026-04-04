@@ -27,6 +27,7 @@
     "@types/express": "^5.0.6",
     "electron": "^34.5.8",
     "express": "^5.2.1",
-    "menubar": "^9.5.2"
+    "menubar": "^9.5.2",
+    "node-notifier": "^10.0.1"
   }
 }
