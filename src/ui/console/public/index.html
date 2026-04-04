@@ -3,19 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sonny Control Panel</title>
+    <title>Sonny Localhost Control Panel</title>
     <style>
       :root {
-        color-scheme: light;
-        --page: #f4efe3;
-        --panel: rgba(255, 252, 246, 0.86);
-        --panel-border: rgba(31, 41, 55, 0.12);
-        --ink: #14212b;
-        --muted: #5d6b75;
-        --accent: #b85c38;
-        --accent-strong: #8f4022;
-        --ok: #2f6b4f;
-        --shadow: 0 18px 45px rgba(20, 33, 43, 0.08);
+        color-scheme: dark;
+        --bg: #071018;
+        --bg-elevated: rgba(11, 23, 34, 0.94);
+        --panel: rgba(14, 30, 44, 0.9);
+        --panel-border: rgba(118, 151, 176, 0.18);
+        --ink: #e8f2fb;
+        --muted: #90a7ba;
+        --accent: #57d0ff;
+        --accent-soft: rgba(87, 208, 255, 0.12);
+        --ok: #4de0a8;
+        --warn: #ff9c66;
+        --danger: #ff6a6a;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
       }
 
       * {
@@ -28,13 +31,13 @@
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(184, 92, 56, 0.16), transparent 28%),
-          radial-gradient(circle at top right, rgba(47, 107, 79, 0.14), transparent 24%),
-          linear-gradient(180deg, #fbf7ef 0%, var(--page) 100%);
+          radial-gradient(circle at top left, rgba(87, 208, 255, 0.14), transparent 28%),
+          radial-gradient(circle at top right, rgba(77, 224, 168, 0.1), transparent 22%),
+          linear-gradient(180deg, #08111b 0%, var(--bg) 100%);
       }
 
       main {
-        max-width: 1200px;
+        max-width: 1280px;
         margin: 0 auto;
         padding: 32px 20px 48px;
       }
@@ -42,62 +45,40 @@
       .hero {
         display: flex;
         justify-content: space-between;
-        gap: 16px;
+        gap: 20px;
         align-items: flex-start;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
       }
 
       .hero h1 {
         margin: 0;
-        font-family: "Iowan Old Style", "Palatino Linotype", serif;
-        font-size: clamp(2rem, 5vw, 3.4rem);
-        line-height: 0.95;
-        letter-spacing: -0.04em;
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        letter-spacing: -0.05em;
+        line-height: 0.92;
       }
 
       .hero p {
         margin: 12px 0 0;
-        max-width: 620px;
+        max-width: 700px;
         color: var(--muted);
       }
 
-      .toolbar {
+      .hero-actions {
         display: flex;
+        flex-direction: column;
+        align-items: flex-end;
         gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-
-      button,
-      select {
-        font: inherit;
-      }
-
-      button {
-        border: 0;
-        border-radius: 999px;
-        padding: 10px 16px;
-        background: var(--accent);
-        color: #fff;
-        cursor: pointer;
-        box-shadow: var(--shadow);
-      }
-
-      button.secondary {
-        background: rgba(20, 33, 43, 0.08);
-        color: var(--ink);
-        box-shadow: none;
       }
 
       .badge {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
+        padding: 10px 14px;
         border-radius: 999px;
-        padding: 8px 12px;
-        background: rgba(47, 107, 79, 0.12);
+        border: 1px solid rgba(77, 224, 168, 0.2);
+        background: rgba(77, 224, 168, 0.12);
         color: var(--ok);
-        font-size: 0.92rem;
         font-weight: 600;
       }
 
@@ -105,8 +86,41 @@
         content: "";
         width: 10px;
         height: 10px;
-        border-radius: 50%;
+        border-radius: 999px;
         background: currentColor;
+        box-shadow: 0 0 16px currentColor;
+      }
+
+      button,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      select {
+        min-height: 42px;
+        border-radius: 14px;
+      }
+
+      button {
+        border: 1px solid rgba(87, 208, 255, 0.26);
+        background: linear-gradient(180deg, rgba(87, 208, 255, 0.16), rgba(87, 208, 255, 0.08));
+        color: var(--ink);
+        padding: 0 16px;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        border-color: rgba(144, 167, 186, 0.18);
+        background: rgba(144, 167, 186, 0.08);
+      }
+
+      select,
+      textarea {
+        border: 1px solid var(--panel-border);
+        background: rgba(6, 18, 28, 0.96);
+        color: var(--ink);
       }
 
       .grid {
@@ -117,11 +131,10 @@
 
       .panel {
         grid-column: span 12;
-        border: 1px solid var(--panel-border);
-        border-radius: 24px;
         padding: 18px;
-        background: var(--panel);
-        backdrop-filter: blur(14px);
+        border-radius: 22px;
+        border: 1px solid var(--panel-border);
+        background: linear-gradient(180deg, var(--panel), var(--bg-elevated));
         box-shadow: var(--shadow);
       }
 
@@ -133,101 +146,118 @@
         grid-column: span 5;
       }
 
-      .panel h2 {
-        margin: 0 0 8px;
-        font-size: 1rem;
-        letter-spacing: 0.02em;
-        text-transform: uppercase;
-      }
-
       .panel-header {
         display: flex;
         justify-content: space-between;
         gap: 12px;
         align-items: center;
-        margin-bottom: 16px;
+        margin-bottom: 14px;
+      }
+
+      .panel-header h2 {
+        margin: 0;
+        font-size: 0.95rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
       }
 
       .meta,
-      .empty,
-      .hint {
+      .hint,
+      .empty {
         color: var(--muted);
         font-size: 0.92rem;
       }
 
-      dl {
+      .status-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 12px;
-        margin: 0;
       }
 
-      dt {
+      .status-card {
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid rgba(118, 151, 176, 0.14);
+        background: rgba(6, 18, 28, 0.72);
+      }
+
+      .status-card dt {
         color: var(--muted);
-        font-size: 0.82rem;
+        font-size: 0.76rem;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.1em;
       }
 
-      dd {
-        margin: 4px 0 0;
-        font-size: 1.05rem;
+      .status-card dd {
+        margin: 8px 0 0;
+        font-size: 1rem;
         font-weight: 600;
       }
 
-      .stack {
-        display: grid;
-        gap: 12px;
-      }
-
+      .stack,
       .list {
         display: grid;
-        gap: 10px;
-      }
-
-      .list-item {
-        border: 1px solid rgba(20, 33, 43, 0.08);
-        border-radius: 18px;
-        padding: 12px 14px;
-        background: rgba(255, 255, 255, 0.5);
-      }
-
-      .list-item strong {
-        display: block;
-        margin-bottom: 4px;
+        gap: 12px;
       }
 
       .memory-controls {
         display: flex;
-        flex-wrap: wrap;
         gap: 10px;
+        flex-wrap: wrap;
         align-items: center;
       }
 
       textarea {
         width: 100%;
-        min-height: 300px;
-        border: 1px solid rgba(20, 33, 43, 0.12);
-        border-radius: 18px;
+        min-height: 320px;
         padding: 14px;
-        background: rgba(255, 255, 255, 0.9);
-        color: var(--ink);
+        border-radius: 16px;
         resize: vertical;
         font: 0.95rem/1.5 "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+
+      .list-item {
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid rgba(118, 151, 176, 0.14);
+        background: rgba(6, 18, 28, 0.72);
+      }
+
+      .list-item strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .list-item p {
+        margin: 0;
       }
 
       code {
         font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
 
-      @media (max-width: 900px) {
+      @media (max-width: 980px) {
         .panel.wide,
         .panel.tall {
           grid-column: span 12;
         }
 
+        .status-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .hero {
           flex-direction: column;
+        }
+
+        .hero-actions {
+          align-items: flex-start;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .status-grid {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -236,13 +266,13 @@
     <main>
       <section class="hero">
         <div>
-          <h1>Sonny Control Panel</h1>
+          <h1>Sonny<br />Control Panel</h1>
           <p>
-            Local diagnostics for memory, recent conversations, installed skill
-            modules, and gateway state.
+            Localhost diagnostics for memory files, recent SQLite conversations,
+            registered skills, and live gateway runtime state.
           </p>
         </div>
-        <div class="toolbar">
+        <div class="hero-actions">
           <span class="badge" id="connection-status">Connecting</span>
           <button type="button" id="refresh-button">Refresh</button>
         </div>
@@ -251,31 +281,39 @@
       <section class="grid">
         <article class="panel">
           <div class="panel-header">
-            <h2>Status</h2>
+            <h2>Runtime Status</h2>
             <span class="meta" id="status-updated">Waiting for first fetch</span>
           </div>
-          <dl id="status-grid">
-            <div>
+          <dl class="status-grid">
+            <div class="status-card">
               <dt>Gateway</dt>
               <dd id="status-gateway">Unknown</dd>
             </div>
-            <div>
+            <div class="status-card">
+              <dt>Provider</dt>
+              <dd id="status-provider">Unknown</dd>
+            </div>
+            <div class="status-card">
+              <dt>Model</dt>
+              <dd id="status-model">Unknown</dd>
+            </div>
+            <div class="status-card">
               <dt>Voice</dt>
               <dd id="status-voice">Unknown</dd>
             </div>
-            <div>
+            <div class="status-card">
               <dt>Memory Files</dt>
               <dd id="status-memory-count">0</dd>
             </div>
-            <div>
+            <div class="status-card">
               <dt>Recent Messages</dt>
               <dd id="status-conversation-count">0</dd>
             </div>
-            <div>
+            <div class="status-card">
               <dt>Skills</dt>
               <dd id="status-skill-count">0</dd>
             </div>
-            <div>
+            <div class="status-card">
               <dt>Memory Directory</dt>
               <dd id="status-memory-directory"><code>Loading</code></dd>
             </div>
@@ -284,17 +322,17 @@
 
         <article class="panel wide">
           <div class="panel-header">
-            <h2>Memory Editor</h2>
+            <h2>Memory</h2>
             <span class="meta" id="memory-updated">No document loaded</span>
           </div>
           <div class="stack">
             <div class="memory-controls">
-              <label for="memory-select">Document</label>
+              <label for="memory-select">File</label>
               <select id="memory-select"></select>
               <button type="button" class="secondary" id="memory-reload-button">
                 Reload
               </button>
-              <button type="button" id="memory-save-button">Save Memory</button>
+              <button type="button" id="memory-save-button">Save</button>
             </div>
             <textarea
               id="memory-editor"
@@ -308,7 +346,7 @@
         <article class="panel tall">
           <div class="panel-header">
             <h2>Skills</h2>
-            <span class="meta" id="skills-directory">Loading</span>
+            <span class="meta" id="skills-directory">Waiting for gateway</span>
           </div>
           <div class="list" id="skills-list">
             <p class="empty">No skill data loaded yet.</p>
