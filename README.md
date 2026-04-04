@@ -32,6 +32,45 @@ Unlike other AI assistants that reset every conversation, Sonny builds a persist
 - **TTS**: Chatterbox Turbo
 - **Memory**: Markdown + SQLite
 
+## Quickstart
+
+The current setup flow targets macOS because Sonny uses `afplay` for local audio playback and Homebrew for dependency bootstrapping.
+
+1. Run the installer:
+
+   ```bash
+   ./scripts/install.sh
+   ```
+
+2. Edit `.env`:
+   - Set `PORCUPINE_ACCESS_KEY` if you want wake-word voice mode.
+   - Keep `SONNY_VOICE_MODE=0` for text-only startup.
+   - Set `SONNY_VOICE_MODE=1` only after `FASTER_WHISPER_URL` and `CHATTERBOX_URL` point at running services.
+
+3. Build and start Sonny:
+
+   ```bash
+   pnpm build
+   pnpm start
+   ```
+
+### What the installer does
+
+- Checks for `node`, `pnpm`, `ollama`, and `sox`
+- Installs missing system dependencies with Homebrew
+- Runs `pnpm install`
+- Pulls the default Ollama model: `qwen3:8b`
+- Creates the `data/` directory structure Sonny expects
+- Copies `.env.example` to `.env` if `.env` does not already exist
+
+### Voice mode
+
+- `SONNY_VOICE_MODE=1` enables the full loop: wake word -> microphone -> STT -> LLM -> TTS -> speaker
+- Voice mode requires a valid `PORCUPINE_ACCESS_KEY`
+- `FASTER_WHISPER_URL` must point to a running faster-whisper HTTP service
+- `CHATTERBOX_URL` must point to a running Chatterbox HTTP service
+- Startup validation fails fast with a clear error if required env vars are missing or invalid
+
 ## Roadmap
 
 - [ ] Phase 1 — Core: text conversation, memory, basic skills
