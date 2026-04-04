@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import type { ProactiveAgent } from '../core/proactive-agent.js';
+import type { NotificationPayload } from '../core/notifier.js';
+import type { NotificationManager } from '../core/notification-manager.js';
 import {
   MonitorRegistry,
   type MonitorDefinition,
@@ -43,7 +44,7 @@ export interface MonitorCheckResult {
 
 export interface WebMonitorConfig {
   monitorRegistry?: MonitorRegistry;
-  proactiveAgent?: ProactiveAgent;
+  notificationManager?: NotificationManager;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
   fetchTimeoutMs?: number;
@@ -70,9 +71,11 @@ export class WebMonitor {
     this.snapshots = new Map<string, MonitorSnapshot>();
     this.changeListeners = new Set<ChangeListener>();
 
-    if (config.proactiveAgent !== undefined) {
+    if (config.notificationManager !== undefined) {
       this.onChange(async (event) => {
-        await config.proactiveAgent?.notifyMonitorChange(event);
+        await config.notificationManager?.notify(
+          this.toNotificationPayload(event),
+        );
       });
     }
   }
@@ -238,5 +241,31 @@ export class WebMonitor {
     for (const listener of this.changeListeners) {
       await listener(event);
     }
+  }
+
+  private toNotificationPayload(event: MonitorChangeEvent): NotificationPayload {
+    const title = `Web monitor change: ${event.monitor.id}`;
+    const messageParts = [
+      `${event.summary}.`,
+      `URL: ${event.monitor.url}.`,
+    ];
+
+    if (event.diff.addedLines.length > 0) {
+      messageParts.push(`Added: ${event.diff.addedLines.join(' | ')}.`);
+    }
+
+    if (event.diff.removedLines.length > 0) {
+      messageParts.push(`Removed: ${event.diff.removedLines.join(' | ')}.`);
+    }
+
+    const message = messageParts.join(' ');
+
+    return {
+      title,
+      subtitle: event.monitor.url,
+      message,
+      voiceText: `${title}. ${message}`,
+      badge: '!',
+    };
   }
 }
