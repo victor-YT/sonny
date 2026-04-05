@@ -337,6 +337,7 @@ export class UiMainApp {
         );
 
         this.appendConversation('assistant', response);
+        this.broadcastStreamEnd(response);
 
         return response;
       } catch (error: unknown) {
@@ -375,7 +376,11 @@ export class UiMainApp {
   }
 
   private broadcastStreamToken(token: string): void {
-    this.menubarApp?.window?.webContents.send('gateway:stream-token', token);
+    this.menubarApp?.window?.webContents.send('gateway:token', token);
+  }
+
+  private broadcastStreamEnd(response: string): void {
+    this.menubarApp?.window?.webContents.send('gateway:stream-end', response);
   }
 
   private appendConversation(

@@ -20,8 +20,11 @@ async function initializePanel(): Promise<void> {
     console.log(`[ui.panel] status changed status=${snapshot.status}`);
     renderStatus(snapshot);
   });
-  window.sonny.onStreamToken((token) => {
+  window.sonny.onToken((token) => {
     appendStreamToken(token);
+  });
+  window.sonny.onStreamEnd((response) => {
+    finalizePendingAssistantMessage(response);
   });
 
   composerFormElement.addEventListener('submit', async (event) => {
@@ -46,7 +49,6 @@ async function initializePanel(): Promise<void> {
       console.log(
         `[ui.panel] sendMessage resolved responseLength=${response.length}`,
       );
-      finalizePendingAssistantMessage(response);
     } catch (error: unknown) {
       console.error('[ui.panel] sendMessage failed', error);
       finalizePendingAssistantMessage(`Message failed: ${toErrorMessage(error)}`);

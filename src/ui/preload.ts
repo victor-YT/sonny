@@ -24,6 +24,8 @@ export interface SonnyBridge {
   hideCapsule(): Promise<void>;
   togglePanel(): Promise<void>;
   onStatusChanged(listener: (snapshot: UiStatusSnapshot) => void): () => void;
+  onToken(listener: (token: string) => void): () => void;
+  onStreamEnd(listener: (response: string) => void): () => void;
   onStreamToken(listener: (token: string) => void): () => void;
 }
 
@@ -88,23 +90,44 @@ const sonnyBridge: SonnyBridge = {
       ipcRenderer.removeListener('ui:status-changed', wrappedListener);
     };
   },
-  onStreamToken: (listener) => {
-    console.log('[ui.preload] registering gateway:stream-token listener');
+  onToken: (listener) => {
+    console.log('[ui.preload] registering gateway:token listener');
     const wrappedListener = (
       _event: Electron.IpcRendererEvent,
       token: string,
     ) => {
       console.log(
-        `[ui.preload] gateway:stream-token received tokenLength=${token.length}`,
+        `[ui.preload] gateway:token received tokenLength=${token.length}`,
       );
       listener(token);
     };
 
-    ipcRenderer.on('gateway:stream-token', wrappedListener);
+    ipcRenderer.on('gateway:token', wrappedListener);
 
     return () => {
-      ipcRenderer.removeListener('gateway:stream-token', wrappedListener);
+      ipcRenderer.removeListener('gateway:token', wrappedListener);
     };
+  },
+  onStreamEnd: (listener) => {
+    console.log('[ui.preload] registering gateway:stream-end listener');
+    const wrappedListener = (
+      _event: Electron.IpcRendererEvent,
+      response: string,
+    ) => {
+      console.log(
+        `[ui.preload] gateway:stream-end received responseLength=${response.length}`,
+      );
+      listener(response);
+    };
+
+    ipcRenderer.on('gateway:stream-end', wrappedListener);
+
+    return () => {
+      ipcRenderer.removeListener('gateway:stream-end', wrappedListener);
+    };
+  },
+  onStreamToken: (listener) => {
+    return sonnyBridge.onToken(listener);
   },
 };
 
