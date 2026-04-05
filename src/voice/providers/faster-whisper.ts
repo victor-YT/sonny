@@ -3,7 +3,6 @@ import type { SttOptions, SttProvider, SttResult, SttSegment } from './stt.js';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8000';
 const DEFAULT_TRANSCRIBE_PATH = '/transcribe';
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_AUDIO_FIELD_NAME = 'audio';
 const DEFAULT_FILENAME = 'audio.wav';
 const DEFAULT_MIME_TYPE = 'audio/wav';
 
@@ -12,13 +11,13 @@ interface FasterWhisperResponse {
   language?: string;
   confidence?: number;
   segments?: SttSegment[];
+  final?: boolean;
 }
 
 export interface FasterWhisperConfig {
   baseUrl?: string;
   transcribePath?: string;
   timeoutMs?: number;
-  audioFieldName?: string;
   filename?: string;
   mimeType?: string;
   headers?: Record<string, string>;
@@ -26,12 +25,11 @@ export interface FasterWhisperConfig {
 
 export class FasterWhisperProvider implements SttProvider {
   public readonly name = 'faster-whisper';
-  public readonly supportsStreaming = false;
+  public readonly supportsStreaming = true;
 
   private readonly baseUrl: string;
   private readonly transcribePath: string;
   private readonly timeoutMs: number;
-  private readonly audioFieldName: string;
   private readonly filename: string;
   private readonly mimeType: string;
   private readonly headers: Record<string, string>;
@@ -42,7 +40,6 @@ export class FasterWhisperProvider implements SttProvider {
       config.transcribePath ?? DEFAULT_TRANSCRIBE_PATH,
     );
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.audioFieldName = config.audioFieldName ?? DEFAULT_AUDIO_FIELD_NAME;
     this.filename = config.filename ?? DEFAULT_FILENAME;
     this.mimeType = config.mimeType ?? DEFAULT_MIME_TYPE;
     this.headers = config.headers ?? {};
@@ -52,25 +49,12 @@ export class FasterWhisperProvider implements SttProvider {
     audio: Buffer,
     options: SttOptions = {},
   ): Promise<SttResult> {
-    const formData = new FormData();
-    const audioBlob = new Blob([new Uint8Array(audio)], { type: this.mimeType });
-
-    formData.set(this.audioFieldName, audioBlob, this.filename);
-
-    if (options.language !== undefined) {
-      formData.set('language', options.language);
-    }
-
-    if (options.prompt !== undefined) {
-      formData.set('prompt', options.prompt);
-    }
-
     const response = await this.fetchWithTimeout(
       `${this.baseUrl}${this.transcribePath}`,
       {
         method: 'POST',
-        headers: this.headers,
-        body: formData,
+        headers: this.buildHeaders(options),
+        body: new Uint8Array(audio),
       },
     );
 
@@ -88,6 +72,58 @@ export class FasterWhisperProvider implements SttProvider {
     };
   }
 
+  public async *streamTranscribe(
+    audioStream: AsyncIterable<Buffer>,
+  ): AsyncIterable<SttResult> {
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}${this.transcribePath}?stream=true`,
+      {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: this.toReadableStream(audioStream),
+        duplex: 'half',
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(await this.buildHttpError(response, 'faster-whisper'));
+    }
+
+    if (response.body === null) {
+      throw new Error('faster-whisper streaming response body is unavailable');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+
+      while (true) {
+        const newlineIndex = buffer.indexOf('\n');
+
+        if (newlineIndex < 0) {
+          break;
+        }
+
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+
+        if (line.length === 0) {
+          continue;
+        }
+
+        yield this.toSttResult(this.parseJsonPayload(JSON.parse(line) as unknown));
+      }
+    }
+
+    const trailing = `${buffer}${decoder.decode()}`.trim();
+
+    if (trailing.length > 0) {
+      yield this.toSttResult(this.parseJsonPayload(JSON.parse(trailing) as unknown));
+    }
+  }
+
   private normalizeBaseUrl(baseUrl: string): string {
     return baseUrl.replace(/\/+$/, '');
   }
@@ -98,7 +134,7 @@ export class FasterWhisperProvider implements SttProvider {
 
   private async fetchWithTimeout(
     input: string,
-    init: RequestInit,
+    init: RequestInitWithDuplex,
   ): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -124,6 +160,24 @@ export class FasterWhisperProvider implements SttProvider {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private buildHeaders(options: SttOptions = {}): Record<string, string> {
+    const headers: Record<string, string> = {
+      'content-type': this.mimeType,
+      'x-audio-filename': this.filename,
+      ...this.headers,
+    };
+
+    if (options.language !== undefined) {
+      headers['x-language'] = options.language;
+    }
+
+    if (options.prompt !== undefined) {
+      headers['x-prompt'] = options.prompt;
+    }
+
+    return headers;
   }
 
   private async buildHttpError(
@@ -172,11 +226,44 @@ export class FasterWhisperProvider implements SttProvider {
     const segments = this.parseSegments(payload.segments);
 
     return {
-      text,
+      text: text.trim(),
       language,
       confidence,
       segments,
     };
+  }
+
+  private toSttResult(result: FasterWhisperResponse): SttResult {
+    return {
+      text: result.text,
+      language: result.language,
+      confidence: result.confidence,
+      segments: result.segments,
+    };
+  }
+
+  private toReadableStream(
+    audioStream: AsyncIterable<Buffer>,
+  ): ReadableStream<Uint8Array> {
+    const iterator = audioStream[Symbol.asyncIterator]();
+
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        const nextChunk = await iterator.next();
+
+        if (nextChunk.done) {
+          controller.close();
+          return;
+        }
+
+        controller.enqueue(new Uint8Array(nextChunk.value));
+      },
+      cancel: async () => {
+        if (iterator.return !== undefined) {
+          await iterator.return();
+        }
+      },
+    });
   }
 
   private parseSegments(payload: unknown): SttSegment[] | undefined {
@@ -226,4 +313,8 @@ export class FasterWhisperProvider implements SttProvider {
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
   }
+}
+
+interface RequestInitWithDuplex extends RequestInit {
+  duplex?: 'half';
 }

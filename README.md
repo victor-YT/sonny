@@ -143,6 +143,41 @@ If you want to install everything yourself:
    - faster-whisper at `http://127.0.0.1:8000`
    - Chatterbox at `http://127.0.0.1:8001`
 
+### faster-whisper service
+
+Sonny expects a local faster-whisper HTTP service on port `8000`.
+
+1. Install the Python dependencies.
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install fastapi uvicorn faster-whisper python-multipart
+   ```
+
+2. Start the service.
+
+   ```bash
+   python3 scripts/whisper-server.py
+   ```
+
+The server exposes:
+
+- `POST /transcribe`
+  Accepts raw audio bytes and returns JSON with `text`, `language`, `confidence`, and `segments`.
+
+- `POST /transcribe?stream=true`
+  Accepts a streamed audio request body and returns NDJSON transcript updates for streaming STT.
+
+By default it uses the faster-whisper `small` model for lower latency. You can override it with:
+
+```bash
+FASTER_WHISPER_MODEL=small
+FASTER_WHISPER_DEVICE=auto
+FASTER_WHISPER_COMPUTE_TYPE=int8
+python3 scripts/whisper-server.py
+```
+
 ## Configuration
 
 Sonny reads startup settings from `.env` and richer runtime settings from `data/config.json`.
@@ -244,6 +279,8 @@ In voice mode, Sonny:
 7. plays audio locally
 
 The response processor strips Markdown, injects speech tags such as `[hesitation]`, `[laugh]`, and `[pause]`, and splits responses into sentence-sized chunks for smoother streaming playback.
+
+The faster-whisper provider also supports streaming transcription updates when the capture pipeline supplies an audio stream instead of a single buffered clip.
 
 ### Menubar mode
 
