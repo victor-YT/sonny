@@ -11,6 +11,7 @@ import type {
 
 const DEFAULT_BASE_URL = 'http://localhost:11434';
 const DEFAULT_MODEL = 'qwen3:8b';
+const DEFAULT_KEEP_ALIVE = -1;
 const CHAT_ENDPOINT = '/api/chat';
 
 type OllamaRole = LlmMessage['role'];
@@ -49,6 +50,7 @@ interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
   stream: boolean;
+  keep_alive?: string | number;
   tools?: OllamaToolDefinitionPayload[];
   options?: OllamaRequestOptionsPayload;
 }
@@ -61,16 +63,19 @@ interface OllamaChatResponse {
 export interface OllamaConfig {
   baseUrl?: string;
   model?: string;
+  keepAlive?: string | number;
 }
 
 export class OllamaProvider implements LlmProvider {
   public readonly name = 'ollama';
   private readonly baseUrl: string;
   private readonly model: string;
+  private readonly keepAlive: string | number;
 
   public constructor(config: OllamaConfig = {}) {
     this.baseUrl = this.normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
     this.model = config.model ?? DEFAULT_MODEL;
+    this.keepAlive = this.resolveKeepAlive(config.keepAlive);
   }
 
   public async generate(
@@ -120,6 +125,26 @@ export class OllamaProvider implements LlmProvider {
     return baseUrl.replace(/\/+$/, '');
   }
 
+  private resolveKeepAlive(value: string | number | undefined): string | number {
+    if (typeof value === 'number') {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+
+    const envValue =
+      process.env.OLLAMA_KEEP_ALIVE ??
+      process.env.SONNY_OLLAMA_KEEP_ALIVE;
+
+    if (envValue !== undefined && envValue.trim().length > 0) {
+      return envValue.trim();
+    }
+
+    return DEFAULT_KEEP_ALIVE;
+  }
+
   private async request(
     messages: LlmMessage[],
     options: LlmGenerateOptions,
@@ -157,6 +182,7 @@ export class OllamaProvider implements LlmProvider {
         this.withSystemPrompt(messages, options.systemPrompt),
       ),
       stream,
+      keep_alive: this.keepAlive,
     };
 
     const tools = this.toOllamaTools(options.tools);

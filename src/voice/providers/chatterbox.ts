@@ -5,11 +5,11 @@ const DEFAULT_SYNTHESIZE_PATH = '/synthesize';
 const DEFAULT_STREAM_PATH = '/synthesize/stream';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-interface ChatterboxJsonResponse {
+interface Qwen3TtsJsonResponse {
   audio: string;
 }
 
-export interface ChatterboxConfig {
+export interface Qwen3TtsConfig {
   baseUrl?: string;
   synthesizePath?: string;
   streamPath?: string;
@@ -17,8 +17,8 @@ export interface ChatterboxConfig {
   headers?: Record<string, string>;
 }
 
-export class ChatterboxProvider implements TtsProvider {
-  public readonly name = 'chatterbox';
+export class Qwen3TTSProvider implements TtsProvider {
+  public readonly name = 'qwen3-tts';
   public readonly supportsStreaming = true;
 
   private readonly baseUrl: string;
@@ -27,7 +27,7 @@ export class ChatterboxProvider implements TtsProvider {
   private readonly timeoutMs: number;
   private readonly headers: Record<string, string>;
 
-  public constructor(config: ChatterboxConfig = {}) {
+  public constructor(config: Qwen3TtsConfig = {}) {
     this.baseUrl = this.normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
     this.synthesizePath = this.normalizePath(
       config.synthesizePath ?? DEFAULT_SYNTHESIZE_PATH,
@@ -163,7 +163,7 @@ export class ChatterboxProvider implements TtsProvider {
         error instanceof Error &&
         error.name === 'AbortError'
       ) {
-        throw new Error(`Chatterbox request timed out after ${this.timeoutMs}ms`);
+        throw new Error(`Qwen3-TTS request timed out after ${this.timeoutMs}ms`);
       }
 
       throw error;
@@ -176,7 +176,7 @@ export class ChatterboxProvider implements TtsProvider {
     const errorBody = (await response.text()).trim();
     const detail = errorBody.length > 0 ? `: ${errorBody}` : '';
 
-    return `Chatterbox request failed with status ${response.status} ${response.statusText}${detail}`;
+    return `Qwen3-TTS request failed with status ${response.status} ${response.statusText}${detail}`;
   }
 
   private async readAudioResponse(response: Response): Promise<Buffer> {
@@ -194,15 +194,15 @@ export class ChatterboxProvider implements TtsProvider {
     return Buffer.from(audioBuffer);
   }
 
-  private parseJsonPayload(payload: unknown): ChatterboxJsonResponse {
+  private parseJsonPayload(payload: unknown): Qwen3TtsJsonResponse {
     if (!this.isRecord(payload)) {
-      throw new Error('Chatterbox response payload must be an object');
+      throw new Error('Qwen3-TTS response payload must be an object');
     }
 
     const audioValue = this.readAudioField(payload);
 
     if (audioValue === undefined || audioValue.length === 0) {
-      throw new Error('Chatterbox response payload is missing audio data');
+      throw new Error('Qwen3-TTS response payload is missing audio data');
     }
 
     return {
@@ -228,3 +228,11 @@ export class ChatterboxProvider implements TtsProvider {
     return typeof value === 'object' && value !== null;
   }
 }
+
+export {
+  Qwen3TTSProvider as ChatterboxProvider,
+};
+
+export type {
+  Qwen3TtsConfig as ChatterboxConfig,
+};

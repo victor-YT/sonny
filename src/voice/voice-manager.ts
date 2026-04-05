@@ -339,12 +339,46 @@ export class VoiceManager {
         wakeWord: options.wakeWord,
       });
 
-      this.setState('thinking');
-      const thinkingSoundTask = this.playThinkingSound(sttResult.text, {
+      const ttsOptions = {
         ...this.defaultTtsOptions,
         ...options.tts,
-      });
-      const response = await this.gateway.chat(sttResult.text);
+      };
+      this.setState('thinking');
+      const thinkingSoundTask = this.playThinkingSound(sttResult.text, ttsOptions);
+      const sentenceAudioTasks: Array<Promise<Buffer>> = [];
+      const responseChunks: string[] = [];
+      let bufferedText = '';
+
+      for await (const chunk of this.gateway.streamChat(sttResult.text)) {
+        if (chunk.type !== 'text' || chunk.text === undefined) {
+          continue;
+        }
+
+        responseChunks.push(chunk.text);
+        bufferedText += chunk.text;
+
+        const extracted = this.extractCompletedSentences(bufferedText);
+
+        bufferedText = extracted.remainder;
+
+        for (const sentence of extracted.sentences) {
+          this.setState('synthesizing');
+          sentenceAudioTasks.push(
+            this.speakStreamingSentence(sentence, ttsOptions),
+          );
+        }
+      }
+
+      const trailingSentence = bufferedText.trim();
+
+      if (trailingSentence.length > 0) {
+        this.setState('synthesizing');
+        sentenceAudioTasks.push(
+          this.speakStreamingSentence(trailingSentence, ttsOptions),
+        );
+      }
+
+      const response = responseChunks.join('');
       await thinkingSoundTask;
 
       this.emit({
@@ -353,12 +387,7 @@ export class VoiceManager {
         wakeWord: options.wakeWord,
       });
 
-      this.setState('synthesizing');
-      const processedResponse = this.responseProcessor.process(response);
-      const spokenAudio = await this.synthesizeForPlayback(processedResponse, {
-        ...this.defaultTtsOptions,
-        ...options.tts,
-      });
+      const spokenAudio = Buffer.concat(await Promise.all(sentenceAudioTasks));
 
       const result: VoiceInteractionResult = {
         wakeWord: options.wakeWord,
@@ -481,8 +510,7 @@ export class VoiceManager {
     }
 
     try {
-      const processedResponse = this.responseProcessor.process(thinkingSound);
-      await this.synthesizeForPlayback(processedResponse, options);
+      await this.speakStreamingSentence(thinkingSound, options);
     } catch (error: unknown) {
       this.emit({
         type: 'error',
@@ -547,7 +575,7 @@ export class VoiceManager {
         sentence.taggedText,
         options,
       );
-      const collectedStream = this.createCollectedStream(sourceStream);
+      const collectedStream = this.createPrefetchedStream(sourceStream);
 
       this.playbackQueue.enqueueStream(collectedStream.stream, {
         text: sentence.text,
@@ -578,52 +606,196 @@ export class VoiceManager {
     };
   }
 
-  private createCollectedStream(
+  private async speakStreamingSentence(
+    text: string,
+    options: TtsOptions,
+  ): Promise<Buffer> {
+    const processedResponse = this.responseProcessor.process(text);
+
+    return this.synthesizeForPlayback(processedResponse, options);
+  }
+
+  private extractCompletedSentences(
+    text: string,
+  ): { sentences: string[]; remainder: string } {
+    const sentences: string[] = [];
+    let startIndex = 0;
+    let index = 0;
+
+    while (index < text.length) {
+      const current = text[index];
+
+      if (
+        current !== '.' &&
+        current !== '!' &&
+        current !== '?'
+      ) {
+        index += 1;
+        continue;
+      }
+
+      let endIndex = index + 1;
+
+      while (
+        endIndex < text.length &&
+        this.isSentencePunctuation(text[endIndex] ?? '')
+      ) {
+        endIndex += 1;
+      }
+
+      while (
+        endIndex < text.length &&
+        this.isTrailingSentenceCloser(text[endIndex] ?? '')
+      ) {
+        endIndex += 1;
+      }
+
+      const nextCharacter = text[endIndex];
+
+      if (nextCharacter !== undefined && !/\s/u.test(nextCharacter)) {
+        index += 1;
+        continue;
+      }
+
+      const sentence = text.slice(startIndex, endIndex).trim();
+
+      if (sentence.length > 0) {
+        sentences.push(sentence);
+      }
+
+      while (endIndex < text.length && /\s/u.test(text[endIndex] ?? '')) {
+        endIndex += 1;
+      }
+
+      startIndex = endIndex;
+      index = endIndex;
+    }
+
+    return {
+      sentences,
+      remainder: text.slice(startIndex),
+    };
+  }
+
+  private isSentencePunctuation(value: string): boolean {
+    return value === '.' || value === '!' || value === '?';
+  }
+
+  private isTrailingSentenceCloser(value: string): boolean {
+    return value === '"' || value === '\'' || value === ')' || value === ']';
+  }
+
+  private createPrefetchedStream(
     source: AsyncIterable<Buffer>,
   ): { stream: AsyncIterable<Buffer>; completed: Promise<Buffer> } {
     const chunks: Buffer[] = [];
+    const bufferedChunks: Buffer[] = [];
+    const waiters: Array<() => void> = [];
+    let completed = false;
+    let failed: Error | undefined;
     let resolveCompleted: ((audio: Buffer) => void) | undefined;
     let rejectCompleted: ((error: Error) => void) | undefined;
-    const completed = new Promise<Buffer>((resolve, reject) => {
+    const completedPromise = new Promise<Buffer>((resolve, reject) => {
       resolveCompleted = resolve;
       rejectCompleted = (error) => {
         reject(error);
       };
     });
 
+    void this.prefetchStream(
+      source,
+      chunks,
+      bufferedChunks,
+      waiters,
+      () => {
+        completed = true;
+      },
+      (error) => {
+        failed = error;
+      },
+      (audio) => {
+        resolveCompleted?.(audio);
+      },
+      (error) => {
+        rejectCompleted?.(error);
+      },
+    );
+
     return {
-      stream: this.collectStream(
-        source,
-        chunks,
-        (audio) => {
-          resolveCompleted?.(audio);
-        },
-        (error) => {
-          rejectCompleted?.(error);
-        },
+      stream: this.readPrefetchedStream(
+        bufferedChunks,
+        waiters,
+        () => completed,
+        () => failed,
       ),
-      completed,
+      completed: completedPromise,
     };
   }
 
-  private async *collectStream(
+  private async prefetchStream(
     source: AsyncIterable<Buffer>,
     chunks: Buffer[],
+    bufferedChunks: Buffer[],
+    waiters: Array<() => void>,
+    markCompleted: () => void,
+    setFailed: (error: Error) => void,
     resolveCompleted: (audio: Buffer) => void,
     rejectCompleted: (error: Error) => void,
-  ): AsyncIterable<Buffer> {
+  ): Promise<void> {
     try {
       for await (const chunk of source) {
         chunks.push(chunk);
-        yield chunk;
+        bufferedChunks.push(chunk);
+        this.flushPrefetchedWaiters(waiters);
       }
 
+      markCompleted();
+      this.flushPrefetchedWaiters(waiters);
       resolveCompleted(Buffer.concat(chunks));
     } catch (error: unknown) {
       const streamingError = this.toError(error, 'Streaming synthesis failed');
 
+      setFailed(streamingError);
+      this.flushPrefetchedWaiters(waiters);
       rejectCompleted(streamingError);
-      throw streamingError;
+    }
+  }
+
+  private async *readPrefetchedStream(
+    bufferedChunks: Buffer[],
+    waiters: Array<() => void>,
+    isCompleted: () => boolean,
+    getFailed: () => Error | undefined,
+  ): AsyncIterable<Buffer> {
+    while (true) {
+      const failed = getFailed();
+
+      if (failed !== undefined) {
+        throw failed;
+      }
+
+      const chunk = bufferedChunks.shift();
+
+      if (chunk !== undefined) {
+        yield chunk;
+        continue;
+      }
+
+      if (isCompleted()) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    }
+  }
+
+  private flushPrefetchedWaiters(waiters: Array<() => void>): void {
+    while (waiters.length > 0) {
+      const waiter = waiters.shift();
+
+      waiter?.();
     }
   }
 

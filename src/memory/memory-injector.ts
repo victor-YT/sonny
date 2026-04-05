@@ -3,6 +3,7 @@ import type { RecentMemory, RecentMemoryMessage } from './recent-memory.js';
 
 const DEFAULT_MAX_LONG_TERM_MATCHES = 6;
 const DEFAULT_MAX_RECENT_MATCHES = 6;
+const DEFAULT_MAX_INJECTED_ENTRIES = 5;
 
 interface MemorySnippet {
   category: MemoryDocumentName;
@@ -14,11 +15,17 @@ interface ScoredValue<T> {
   score: number;
 }
 
+interface ContextMatch<T> extends ScoredValue<T> {
+  kind: 'long-term' | 'recent';
+  index: number;
+}
+
 export interface MemoryInjectorConfig {
   memoryStore: MemoryStore;
   recentMemory: RecentMemory;
   maxLongTermMatches?: number;
   maxRecentMatches?: number;
+  maxInjectedEntries?: number;
 }
 
 export class MemoryInjector {
@@ -26,6 +33,7 @@ export class MemoryInjector {
   private readonly recentMemory: RecentMemory;
   private readonly maxLongTermMatches: number;
   private readonly maxRecentMatches: number;
+  private readonly maxInjectedEntries: number;
 
   public constructor(config: MemoryInjectorConfig) {
     this.memoryStore = config.memoryStore;
@@ -33,6 +41,8 @@ export class MemoryInjector {
     this.maxLongTermMatches =
       config.maxLongTermMatches ?? DEFAULT_MAX_LONG_TERM_MATCHES;
     this.maxRecentMatches = config.maxRecentMatches ?? DEFAULT_MAX_RECENT_MATCHES;
+    this.maxInjectedEntries =
+      config.maxInjectedEntries ?? DEFAULT_MAX_INJECTED_ENTRIES;
   }
 
   public async composeSystemPrompt(
@@ -55,25 +65,37 @@ export class MemoryInjector {
   public async buildContext(userMessage: string): Promise<string> {
     const longTermMatches = await this.findLongTermMatches(userMessage);
     const recentMatches = this.findRecentMatches(userMessage);
+    const selectedMatches = this.selectTopMatches(longTermMatches, recentMatches);
+    const selectedLongTermMatches = selectedMatches
+      .filter((match): match is ContextMatch<MemorySnippet> => match.kind === 'long-term')
+      .map((match) => match.item);
+    const selectedRecentMatches = selectedMatches
+      .filter(
+        (match): match is ContextMatch<RecentMemoryMessage> => match.kind === 'recent',
+      )
+      .map((match) => match.item);
 
-    if (longTermMatches.length === 0 && recentMatches.length === 0) {
+    if (
+      selectedLongTermMatches.length === 0 &&
+      selectedRecentMatches.length === 0
+    ) {
       return '';
     }
 
     const sections = ['Relevant memory context:'];
 
-    if (longTermMatches.length > 0) {
+    if (selectedLongTermMatches.length > 0) {
       sections.push('Long-term memory:');
 
-      for (const match of longTermMatches) {
+      for (const match of selectedLongTermMatches) {
         sections.push(`- [${match.category}] ${match.content}`);
       }
     }
 
-    if (recentMatches.length > 0) {
+    if (selectedRecentMatches.length > 0) {
       sections.push('Recent memory from the last 7 days:');
 
-      for (const match of recentMatches) {
+      for (const match of selectedRecentMatches) {
         sections.push(
           `- [${match.role} | ${match.createdAt.toISOString()}] ${match.content}`,
         );
@@ -87,25 +109,68 @@ export class MemoryInjector {
     return sections.join('\n');
   }
 
-  private async findLongTermMatches(userMessage: string): Promise<MemorySnippet[]> {
+  private async findLongTermMatches(
+    userMessage: string,
+  ): Promise<ScoredValue<MemorySnippet>[]> {
     const documents = await this.memoryStore.readAllDocuments();
     const snippets = documents.flatMap((document) =>
       this.extractSnippets(document.name, document.content),
     );
 
-    return this.rank(snippets, userMessage, this.maxLongTermMatches).map(
-      ({ item }) => item,
-    );
+    return this.rank(snippets, userMessage, this.maxLongTermMatches);
   }
 
-  private findRecentMatches(userMessage: string): RecentMemoryMessage[] {
+  private findRecentMatches(
+    userMessage: string,
+  ): ScoredValue<RecentMemoryMessage>[] {
     const messages = this.recentMemory.listMessages({
       limit: this.maxRecentMatches * 4,
     });
 
-    return this.rank(messages, userMessage, this.maxRecentMatches).map(
-      ({ item }) => item,
-    );
+    return this.rank(messages, userMessage, this.maxRecentMatches);
+  }
+
+  private selectTopMatches(
+    longTermMatches: ScoredValue<MemorySnippet>[],
+    recentMatches: ScoredValue<RecentMemoryMessage>[],
+  ): Array<ContextMatch<MemorySnippet> | ContextMatch<RecentMemoryMessage>> {
+    const combinedMatches: Array<
+      ContextMatch<MemorySnippet> | ContextMatch<RecentMemoryMessage>
+    > = [
+      ...longTermMatches.map((entry, index) => ({
+        kind: 'long-term' as const,
+        item: entry.item,
+        score: entry.score,
+        index,
+      })),
+      ...recentMatches.map((entry, index) => ({
+        kind: 'recent' as const,
+        item: entry.item,
+        score: entry.score,
+        index,
+      })),
+    ];
+
+    combinedMatches.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (left.kind !== right.kind) {
+        return left.kind === 'recent' ? -1 : 1;
+      }
+
+      if (left.kind === 'recent' && right.kind === 'recent') {
+        return (
+          right.item.createdAt.getTime() -
+          left.item.createdAt.getTime()
+        );
+      }
+
+      return left.index - right.index;
+    });
+
+    return combinedMatches.slice(0, this.maxInjectedEntries);
   }
 
   private extractSnippets(
