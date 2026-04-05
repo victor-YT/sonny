@@ -2,8 +2,8 @@ import { BrowserWindow, screen } from 'electron';
 
 export type CapsuleStatus = 'idle' | 'listening' | 'thinking' | 'speaking';
 
-const CAPSULE_WIDTH = 280;
-const CAPSULE_HEIGHT = 72;
+const CAPSULE_WIDTH = 300;
+const CAPSULE_HEIGHT = 82;
 const CAPSULE_TOP_OFFSET = 48;
 
 const STATUS_COPY: Record<CapsuleStatus, { title: string; subtitle: string }> = {
@@ -109,6 +109,7 @@ export class CapsuleWindow {
     const window = this.create();
     const copy = STATUS_COPY[status];
     const color = this.getAccentColor(status);
+    const statusClass = `status-${status}`;
     const html = `
       <!doctype html>
       <html lang="en">
@@ -125,36 +126,97 @@ export class CapsuleWindow {
               margin: 0;
               background: transparent;
               overflow: hidden;
+              display: grid;
+              place-items: center;
             }
 
             .capsule {
+              --accent: ${color};
               width: ${CAPSULE_WIDTH}px;
               height: ${CAPSULE_HEIGHT}px;
-              border-radius: 999px;
+              border-radius: 28px;
               box-sizing: border-box;
-              padding: 14px 20px;
+              padding: 16px 18px;
               display: grid;
-              grid-template-columns: 12px 1fr;
-              gap: 14px;
+              grid-template-columns: 18px 1fr;
+              gap: 16px;
               align-items: center;
+              position: relative;
+              overflow: hidden;
               color: #f7fafc;
               background:
-                radial-gradient(circle at 20% 20%, rgba(255,255,255,0.18), transparent 40%),
-                linear-gradient(135deg, rgba(12, 18, 28, 0.88), rgba(19, 29, 42, 0.94));
-              border: 1px solid rgba(255,255,255,0.14);
-              backdrop-filter: blur(18px);
-              box-shadow: 0 18px 40px rgba(3, 8, 18, 0.32);
+                linear-gradient(180deg, rgba(15, 20, 31, 0.74), rgba(7, 10, 18, 0.9)),
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 44%);
+              border: 1px solid rgba(255,255,255,0.12);
+              backdrop-filter: blur(24px) saturate(140%);
+              box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.1),
+                inset 0 -18px 30px rgba(0,0,0,0.22),
+                0 20px 60px rgba(2, 6, 15, 0.48);
+            }
+
+            .capsule::before {
+              content: "";
+              position: absolute;
+              inset: 0;
+              background:
+                radial-gradient(circle at 18% 18%, ${this.withOpacity(color, 0.18)}, transparent 28%),
+                radial-gradient(circle at 82% 115%, rgba(255,255,255,0.08), transparent 32%);
+              pointer-events: none;
+            }
+
+            .capsule::after {
+              content: "";
+              position: absolute;
+              inset: 1px;
+              border-radius: 27px;
+              border: 1px solid rgba(255,255,255,0.06);
+              pointer-events: none;
+            }
+
+            .orb {
+              position: absolute;
+              width: 120px;
+              height: 120px;
+              right: -32px;
+              top: -42px;
+              border-radius: 999px;
+              background: ${this.withOpacity(color, 0.2)};
+              filter: blur(26px);
+              opacity: 0.9;
+              pointer-events: none;
+            }
+
+            .pulse-wrap {
+              position: relative;
+              width: 18px;
+              height: 18px;
+              z-index: 1;
             }
 
             .pulse {
+              position: absolute;
+              inset: 3px;
               width: 12px;
               height: 12px;
               border-radius: 999px;
-              background: ${color};
-              box-shadow: 0 0 0 6px ${this.withOpacity(color, 0.18)};
+              background: var(--accent);
+              box-shadow:
+                0 0 0 6px ${this.withOpacity(color, 0.14)},
+                0 0 18px ${this.withOpacity(color, 0.28)};
+            }
+
+            .pulse-ring {
+              position: absolute;
+              inset: 0;
+              border-radius: 999px;
+              border: 1px solid ${this.withOpacity(color, 0.28)};
+              opacity: 0.7;
             }
 
             .title {
+              position: relative;
+              z-index: 1;
               font-size: 15px;
               font-weight: 600;
               line-height: 1.1;
@@ -162,16 +224,49 @@ export class CapsuleWindow {
             }
 
             .subtitle {
+              position: relative;
+              z-index: 1;
               margin-top: 4px;
               font-size: 12px;
               color: rgba(235, 242, 250, 0.72);
               line-height: 1.2;
             }
+
+            .status-thinking {
+              background:
+                linear-gradient(180deg, rgba(16, 14, 12, 0.72), rgba(8, 9, 14, 0.92)),
+                radial-gradient(circle at top left, rgba(255, 255, 255, 0.08), transparent 44%);
+            }
+
+            .status-thinking .pulse-ring {
+              animation: ring-breathe 1.8s ease-in-out infinite;
+            }
+
+            .status-listening .pulse-ring,
+            .status-speaking .pulse-ring {
+              animation: ring-breathe 2.2s ease-in-out infinite;
+            }
+
+            @keyframes ring-breathe {
+              0%, 100% {
+                transform: scale(0.94);
+                opacity: 0.42;
+              }
+
+              50% {
+                transform: scale(1.08);
+                opacity: 0.88;
+              }
+            }
           </style>
         </head>
         <body>
-          <div class="capsule">
-            <div class="pulse"></div>
+          <div class="capsule ${statusClass}">
+            <div class="orb"></div>
+            <div class="pulse-wrap">
+              <div class="pulse-ring"></div>
+              <div class="pulse"></div>
+            </div>
             <div>
               <div class="title">${copy.title}</div>
               <div class="subtitle">${copy.subtitle}</div>

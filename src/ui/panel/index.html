@@ -73,6 +73,7 @@
       }
 
       .status {
+        --status-glow: rgba(148, 163, 184, 0.12);
         display: inline-flex;
         align-items: center;
         gap: 8px;
@@ -82,6 +83,27 @@
         background: var(--bg-elevated);
         font-size: 12px;
         color: var(--muted);
+        box-shadow: 0 0 0 1px var(--status-glow);
+        transition:
+          border-color 180ms ease,
+          background-color 180ms ease,
+          box-shadow 180ms ease;
+      }
+
+      .status[data-status="listening"] {
+        border-color: rgba(45, 212, 191, 0.22);
+        background: rgba(17, 27, 40, 0.94);
+        box-shadow:
+          0 0 0 1px var(--status-glow),
+          0 12px 28px rgba(9, 17, 27, 0.22);
+      }
+
+      .status[data-status="thinking"] {
+        border-color: rgba(251, 146, 60, 0.22);
+      }
+
+      .status[data-status="speaking"] {
+        border-color: rgba(96, 165, 250, 0.22);
       }
 
       .voice-toggle {
@@ -115,12 +137,60 @@
         opacity: 0.55;
       }
 
-      .status-dot {
-        width: 9px;
-        height: 9px;
+      .status-wave {
+        width: 18px;
+        height: 14px;
+        display: inline-flex;
+        align-items: end;
+        gap: 2px;
+      }
+
+      .status-bar {
+        width: 3px;
+        height: 100%;
         border-radius: 999px;
+        background: currentColor;
+        opacity: 0.34;
+        transform-origin: center bottom;
+        transition:
+          opacity 180ms ease,
+          transform 180ms ease,
+          background-color 180ms ease;
+      }
+
+      .status[data-status="idle"] .status-bar {
+        height: 6px;
+        opacity: 0.26;
+      }
+
+      .status[data-status="listening"] .status-bar {
+        opacity: 0.92;
         background: var(--accent);
-        box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.14);
+        animation: waveform 1s ease-in-out infinite;
+      }
+
+      .status[data-status="listening"] .status-bar:nth-child(2) {
+        animation-delay: 120ms;
+      }
+
+      .status[data-status="listening"] .status-bar:nth-child(3) {
+        animation-delay: 240ms;
+      }
+
+      .status[data-status="listening"] .status-bar:nth-child(4) {
+        animation-delay: 360ms;
+      }
+
+      .status[data-status="thinking"] .status-bar {
+        height: 10px;
+        opacity: 0.8;
+        background: var(--accent-warm);
+      }
+
+      .status[data-status="speaking"] .status-bar {
+        height: 12px;
+        opacity: 0.84;
+        background: var(--accent-cool);
       }
 
       .conversation {
@@ -148,6 +218,14 @@
         font-size: 13px;
         white-space: pre-wrap;
         position: relative;
+      }
+
+      .message-content {
+        display: inline;
+      }
+
+      .message-enter {
+        animation: message-enter 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
       }
 
       .message::after {
@@ -193,6 +271,27 @@
         border-bottom-left-radius: 6px;
       }
 
+      .stream-cursor {
+        display: inline-block;
+        width: 8px;
+        height: 1.05em;
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        border-radius: 999px;
+        background: rgba(237, 243, 251, 0.88);
+        animation: stream-cursor-blink 1s steps(1, end) infinite;
+      }
+
+      @keyframes stream-cursor-blink {
+        0%, 49% {
+          opacity: 1;
+        }
+
+        50%, 100% {
+          opacity: 0;
+        }
+      }
+
       .typing-indicator {
         justify-self: start;
         display: inline-flex;
@@ -232,6 +331,32 @@
         }
       }
 
+      @keyframes waveform {
+        0%, 100% {
+          transform: scaleY(0.35);
+        }
+
+        30% {
+          transform: scaleY(1);
+        }
+
+        60% {
+          transform: scaleY(0.56);
+        }
+      }
+
+      @keyframes message-enter {
+        from {
+          opacity: 0;
+          transform: translateY(10px) scale(0.985);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
       .composer {
         padding: 14px 18px 18px;
         border-top: 1px solid var(--line);
@@ -243,6 +368,7 @@
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 10px;
+        align-items: end;
       }
 
       .composer-input {
@@ -253,7 +379,12 @@
         border-radius: 16px;
         padding: 12px 14px;
         font: inherit;
+        line-height: 1.42;
         outline: none;
+        resize: none;
+        min-height: 48px;
+        max-height: 132px;
+        overflow-y: auto;
       }
 
       .composer-input:focus {
@@ -277,6 +408,23 @@
         cursor: wait;
         opacity: 0.7;
       }
+
+      .composer-meta {
+        margin-top: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .composer-shortcut {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.04);
+      }
     </style>
   </head>
   <body>
@@ -287,9 +435,14 @@
           <h1>Sonny</h1>
           <div class="header-actions">
             <button class="voice-toggle" id="voice-toggle" type="button">Voice Off</button>
-            <div class="status" id="status-chip" aria-live="polite">
-              <span class="status-dot" id="status-dot"></span>
-              <span id="status-label">Idle</span>
+            <div class="status" id="status-chip" aria-live="polite" data-status="idle">
+              <span class="status-wave" aria-hidden="true">
+                <span class="status-bar"></span>
+                <span class="status-bar"></span>
+                <span class="status-bar"></span>
+                <span class="status-bar"></span>
+              </span>
+              <span id="status-label">Ready</span>
             </div>
           </div>
         </div>
@@ -299,16 +452,20 @@
 
       <footer class="composer">
         <form class="composer-form" id="composer-form">
-          <input
+          <textarea
             id="composer-input"
             class="composer-input"
             name="message"
-            type="text"
             autocomplete="off"
             placeholder="Ask something useful."
-          />
+            rows="1"
+          ></textarea>
           <button class="composer-button" id="composer-button" type="submit">Send</button>
         </form>
+        <div class="composer-meta">
+          <span>Enter adds a line break.</span>
+          <span class="composer-shortcut">Cmd+Enter to send</span>
+        </div>
       </footer>
     </div>
 
