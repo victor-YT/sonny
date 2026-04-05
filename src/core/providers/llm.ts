@@ -41,4 +41,5 @@ export interface LlmGenerateOptions {
   maxTokens?: number;
   tools?: ToolDefinition[];
   systemPrompt?: string;
+  signal?: AbortSignal;
 }

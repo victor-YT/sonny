@@ -19,8 +19,8 @@ from pydantic import BaseModel, Field
 
 LOGGER = logging.getLogger("qwen3-tts-server")
 
-DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8001
+DEFAULT_HOST = os.getenv("QWEN3_TTS_HOST", "127.0.0.1")
+DEFAULT_PORT = int(os.getenv("QWEN3_TTS_PORT", "8001"))
 DEFAULT_MODEL_ID = os.getenv(
     "QWEN3_TTS_MODEL",
     "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",

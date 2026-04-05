@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
+import wave
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -18,6 +19,8 @@ DEFAULT_MODEL_NAME = "small"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_DEVICE = "auto"
 DEFAULT_STREAM_CHUNK_BYTES = 32_000
+DEFAULT_STREAM_SAMPLE_RATE = 16_000
+DEFAULT_STREAM_CHANNELS = 1
 
 
 class WhisperService:
@@ -110,6 +113,14 @@ app = FastAPI(title="Sonny faster-whisper service")
 service = WhisperService()
 
 
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "model": service.model_name,
+    }
+
+
 @app.post("/transcribe", response_model=None)
 async def transcribe(
     request: Request,
@@ -168,7 +179,18 @@ async def _stream_transcription(
 
         last_processed_size = len(buffer)
         payload = await _transcribe_snapshot(
-            bytes(buffer),
+            _prepare_audio_bytes(
+                bytes(buffer),
+                encoding=_read_audio_encoding(request.headers.get("x-audio-encoding")),
+                sample_rate_hertz=_read_integer_header(
+                    request.headers.get("x-sample-rate-hertz"),
+                    DEFAULT_STREAM_SAMPLE_RATE,
+                ),
+                channels=_read_integer_header(
+                    request.headers.get("x-audio-channels"),
+                    DEFAULT_STREAM_CHANNELS,
+                ),
+            ),
             suffix=suffix,
             language=language,
             prompt=prompt,
@@ -183,7 +205,18 @@ async def _stream_transcription(
         raise HTTPException(status_code=400, detail="Audio payload is empty")
 
     final_payload = await _transcribe_snapshot(
-        bytes(buffer),
+        _prepare_audio_bytes(
+            bytes(buffer),
+            encoding=_read_audio_encoding(request.headers.get("x-audio-encoding")),
+            sample_rate_hertz=_read_integer_header(
+                request.headers.get("x-sample-rate-hertz"),
+                DEFAULT_STREAM_SAMPLE_RATE,
+            ),
+            channels=_read_integer_header(
+                request.headers.get("x-audio-channels"),
+                DEFAULT_STREAM_CHANNELS,
+            ),
+        ),
         suffix=suffix,
         language=language,
         prompt=prompt,
@@ -232,6 +265,32 @@ def _normalize_suffix(filename: str | None) -> str:
     return suffix if suffix else ".wav"
 
 
+def _prepare_audio_bytes(
+    audio_bytes: bytes,
+    *,
+    encoding: str,
+    sample_rate_hertz: int,
+    channels: int,
+) -> bytes:
+    if encoding == "wav":
+        return audio_bytes
+
+    if encoding != "pcm_s16le":
+        raise HTTPException(status_code=400, detail=f"Unsupported audio encoding: {encoding}")
+
+    buffer = tempfile.SpooledTemporaryFile()
+
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate_hertz)
+        wav_file.writeframes(audio_bytes)
+
+    buffer.seek(0)
+
+    return buffer.read()
+
+
 def _read_text_value(value: str | None) -> str | None:
     if value is None:
         return None
@@ -239,6 +298,32 @@ def _read_text_value(value: str | None) -> str | None:
     normalized = value.strip()
 
     return normalized if normalized else None
+
+
+def _read_integer_header(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+
+    normalized = value.strip()
+
+    if len(normalized) == 0:
+        return default
+
+    try:
+        parsed = int(normalized)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"Expected integer header, received {normalized!r}") from error
+
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail="Audio header values must be positive integers")
+
+    return parsed
+
+
+def _read_audio_encoding(value: str | None) -> str:
+    normalized = _read_text_value(value)
+
+    return normalized if normalized is not None else "wav"
 
 
 def _encode_ndjson(payload: dict[str, Any]) -> bytes:

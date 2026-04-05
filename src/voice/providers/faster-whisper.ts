@@ -74,12 +74,13 @@ export class FasterWhisperProvider implements SttProvider {
 
   public async *streamTranscribe(
     audioStream: AsyncIterable<Buffer>,
+    options: SttOptions = {},
   ): AsyncIterable<SttResult> {
     const response = await this.fetchWithTimeout(
       `${this.baseUrl}${this.transcribePath}?stream=true`,
       {
         method: 'POST',
-        headers: this.buildHeaders(),
+        headers: this.buildHeaders(options),
         body: this.toReadableStream(audioStream),
         duplex: 'half',
       },
@@ -175,6 +176,18 @@ export class FasterWhisperProvider implements SttProvider {
 
     if (options.prompt !== undefined) {
       headers['x-prompt'] = options.prompt;
+    }
+
+    if (options.sampleRateHertz !== undefined) {
+      headers['x-sample-rate-hertz'] = options.sampleRateHertz.toString();
+    }
+
+    if (options.channels !== undefined) {
+      headers['x-audio-channels'] = options.channels.toString();
+    }
+
+    if (options.encoding !== undefined) {
+      headers['x-audio-encoding'] = options.encoding;
     }
 
     return headers;

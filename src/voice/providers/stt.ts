@@ -15,10 +15,16 @@ export interface SttProvider {
   readonly name: string;
   transcribe(audio: Buffer, options?: SttOptions): Promise<SttResult>;
   supportsStreaming: boolean;
-  streamTranscribe?(audioStream: AsyncIterable<Buffer>): AsyncIterable<SttResult>;
+  streamTranscribe?(
+    audioStream: AsyncIterable<Buffer>,
+    options?: SttOptions,
+  ): AsyncIterable<SttResult>;
 }
 
 export interface SttOptions {
   language?: string;
   prompt?: string;
+  sampleRateHertz?: number;
+  channels?: number;
+  encoding?: 'wav' | 'pcm_s16le';
 }

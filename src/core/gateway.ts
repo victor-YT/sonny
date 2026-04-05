@@ -165,6 +165,9 @@ export class Gateway {
 
   public async *streamChat(
     userMessage: string,
+    options: {
+      signal?: AbortSignal;
+    } = {},
   ): AsyncIterable<LlmStreamChunk> {
     const baseSystemPrompt = await this.buildSystemPrompt(userMessage);
     const userEntry: LlmMessage = {
@@ -184,6 +187,7 @@ export class Gateway {
     for await (const chunk of this.llmProvider.stream(contextWindow.messages, {
       tools: this.toolRouter.getDefinitions(),
       systemPrompt: contextWindow.systemPrompt,
+      signal: options.signal,
     })) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
         assistantContent += chunk.text;

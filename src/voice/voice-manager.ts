@@ -74,6 +74,13 @@ export interface VoiceManagerEvent {
 
 export type VoiceManagerListener = (event: VoiceManagerEvent) => void;
 
+class VoicePipelineInterruptedError extends Error {
+  public constructor(message: string = 'Voice pipeline interrupted') {
+    super(message);
+    this.name = 'VoicePipelineInterruptedError';
+  }
+}
+
 export interface VoiceManagerConfig {
   gateway: Gateway;
   runtimeConfig?: RuntimeConfig;
@@ -107,6 +114,7 @@ export class VoiceManager {
 
   private state: VoiceManagerState = 'idle';
   private pipelineTask: Promise<VoiceInteractionResult> | undefined;
+  private pipelineAbortController: AbortController | undefined;
   private started = false;
 
   public constructor(config: VoiceManagerConfig) {
@@ -201,9 +209,15 @@ export class VoiceManager {
       return undefined;
     }
 
+    const accessKey = runtimeConfig.voice.porcupine.accessKey;
+
+    if (accessKey === undefined || accessKey.trim().length === 0) {
+      return undefined;
+    }
+
     return new PorcupineProvider({
-      baseUrl: runtimeConfig.voice.porcupine.url,
-      keywords: runtimeConfig.voice.porcupine.wakeWords,
+      accessKey,
+      keywords: [runtimeConfig.voice.porcupine.wakeWord],
     });
   }
 
@@ -260,6 +274,7 @@ export class VoiceManager {
     }
 
     this.started = false;
+    await this.interruptCurrentInteraction();
 
     try {
       if (this.wakeWordProvider !== undefined) {
@@ -279,6 +294,27 @@ export class VoiceManager {
     return this.processCaptureResult({ audio }, options);
   }
 
+  public async processCapture(
+    capture: VoiceCaptureResult,
+    options: VoiceInteractionOptions = {},
+  ): Promise<VoiceInteractionResult> {
+    return this.processCaptureResult(capture, options);
+  }
+
+  public async interruptCurrentInteraction(): Promise<void> {
+    const pipelineTask = this.pipelineTask;
+
+    this.pipelineAbortController?.abort();
+    this.playbackQueue.clear();
+    await this.speaker?.interrupt();
+
+    if (pipelineTask !== undefined) {
+      await pipelineTask.catch(() => undefined);
+    }
+
+    this.setState(this.getRestingState());
+  }
+
   private async processCaptureResult(
     capture: VoiceCaptureResult,
     options: VoiceInteractionOptions,
@@ -287,13 +323,16 @@ export class VoiceManager {
       throw new Error('Voice pipeline is already processing another request');
     }
 
-    const task = this.runPipeline(capture, options);
+    const abortController = new AbortController();
+    const task = this.runPipeline(capture, options, abortController.signal);
     this.pipelineTask = task;
+    this.pipelineAbortController = abortController;
 
     try {
       return await task;
     } finally {
       this.pipelineTask = undefined;
+      this.pipelineAbortController = undefined;
       this.setState(this.getRestingState());
     }
   }
@@ -325,6 +364,7 @@ export class VoiceManager {
   private async runPipeline(
     capture: VoiceCaptureResult,
     options: VoiceInteractionOptions,
+    signal: AbortSignal,
   ): Promise<VoiceInteractionResult> {
     try {
       this.setState('transcribing');
@@ -332,6 +372,7 @@ export class VoiceManager {
         ...this.defaultSttOptions,
         ...options.stt,
       });
+      this.throwIfInterrupted(signal);
 
       this.emit({
         type: 'transcription',
@@ -342,14 +383,17 @@ export class VoiceManager {
       const ttsOptions = {
         ...this.defaultTtsOptions,
         ...options.tts,
+        signal,
       };
       this.setState('thinking');
-      const thinkingSoundTask = this.playThinkingSound(sttResult.text, ttsOptions);
+      const thinkingSoundTask = this.playThinkingSound(sttResult.text, ttsOptions, signal);
       const sentenceAudioTasks: Array<Promise<Buffer>> = [];
       const responseChunks: string[] = [];
       let bufferedText = '';
 
-      for await (const chunk of this.gateway.streamChat(sttResult.text)) {
+      for await (const chunk of this.gateway.streamChat(sttResult.text, { signal })) {
+        this.throwIfInterrupted(signal);
+
         if (chunk.type !== 'text' || chunk.text === undefined) {
           continue;
         }
@@ -362,9 +406,10 @@ export class VoiceManager {
         bufferedText = extracted.remainder;
 
         for (const sentence of extracted.sentences) {
+          this.throwIfInterrupted(signal);
           this.setState('synthesizing');
           sentenceAudioTasks.push(
-            this.speakStreamingSentence(sentence, ttsOptions),
+            this.speakStreamingSentence(sentence, ttsOptions, signal),
           );
         }
       }
@@ -372,14 +417,16 @@ export class VoiceManager {
       const trailingSentence = bufferedText.trim();
 
       if (trailingSentence.length > 0) {
+        this.throwIfInterrupted(signal);
         this.setState('synthesizing');
         sentenceAudioTasks.push(
-          this.speakStreamingSentence(trailingSentence, ttsOptions),
+          this.speakStreamingSentence(trailingSentence, ttsOptions, signal),
         );
       }
 
       const response = responseChunks.join('');
       await thinkingSoundTask;
+      this.throwIfInterrupted(signal);
 
       this.emit({
         type: 'response',
@@ -406,6 +453,10 @@ export class VoiceManager {
 
       return result;
     } catch (error: unknown) {
+      if (this.isInterruptedError(error)) {
+        throw error;
+      }
+
       this.handleError(this.toError(error, 'Voice pipeline failed'));
       throw error;
     }
@@ -473,6 +524,7 @@ export class VoiceManager {
 
       for await (const result of this.sttProvider.streamTranscribe(
         capture.audioStream,
+        options,
       )) {
         latestResult = result;
       }
@@ -484,7 +536,7 @@ export class VoiceManager {
 
     const audio = await this.resolveCapturedAudio(capture);
 
-    return this.sttProvider.transcribe(audio, options);
+    return this.sttProvider.transcribe(audio, this.toBufferedAudioSttOptions(options));
   }
 
   private async resolveCapturedAudio(capture: VoiceCaptureResult): Promise<Buffer> {
@@ -502,6 +554,7 @@ export class VoiceManager {
   private async playThinkingSound(
     input: string,
     options: TtsOptions,
+    signal: AbortSignal,
   ): Promise<void> {
     const thinkingSound = getThinkingSound(input);
 
@@ -510,8 +563,12 @@ export class VoiceManager {
     }
 
     try {
-      await this.speakStreamingSentence(thinkingSound, options);
+      await this.speakStreamingSentence(thinkingSound, options, signal);
     } catch (error: unknown) {
+      if (this.isInterruptedError(error)) {
+        return;
+      }
+
       this.emit({
         type: 'error',
         error: this.toError(error, 'Thinking sound playback failed'),
@@ -609,7 +666,9 @@ export class VoiceManager {
   private async speakStreamingSentence(
     text: string,
     options: TtsOptions,
+    signal: AbortSignal,
   ): Promise<Buffer> {
+    this.throwIfInterrupted(signal);
     const processedResponse = this.responseProcessor.process(text);
 
     return this.synthesizeForPlayback(processedResponse, options);
@@ -828,6 +887,10 @@ export class VoiceManager {
 
   private handleSpeakerEvent(event: { type: string; error?: Error }): void {
     if (event.type === 'error' && event.error !== undefined) {
+      if (this.isInterruptedError(event.error)) {
+        return;
+      }
+
       this.handleError(event.error);
       return;
     }
@@ -891,5 +954,30 @@ export class VoiceManager {
     }
 
     return new Error(fallbackMessage);
+  }
+
+  private toBufferedAudioSttOptions(options: SttOptions): SttOptions {
+    if (options.encoding !== 'pcm_s16le') {
+      return options;
+    }
+
+    return {
+      language: options.language,
+      prompt: options.prompt,
+      encoding: 'wav',
+    };
+  }
+
+  private throwIfInterrupted(signal: AbortSignal): void {
+    if (signal.aborted) {
+      throw new VoicePipelineInterruptedError();
+    }
+  }
+
+  private isInterruptedError(error: unknown): boolean {
+    return (
+      error instanceof VoicePipelineInterruptedError ||
+      (error instanceof Error && error.name === 'AbortError')
+    );
   }
 }

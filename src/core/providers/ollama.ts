@@ -157,6 +157,7 @@ export class OllamaProvider implements LlmProvider {
         'content-type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      signal: options.signal,
     });
 
     if (!response.ok) {

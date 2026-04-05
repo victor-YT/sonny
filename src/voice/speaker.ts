@@ -132,6 +132,29 @@ export class Speaker {
     this.setState('idle');
   }
 
+  public async interrupt(): Promise<void> {
+    this.stopping = true;
+    this.playbackQueue.splice(0);
+    this.queuedChunks.clear();
+    this.itemMetadata.clear();
+
+    const process = this.currentProcess;
+
+    if (process !== undefined) {
+      process.kill('SIGTERM');
+    }
+
+    await this.cleanupCurrentTempDir();
+
+    this.currentItem = undefined;
+    this.currentProcess = undefined;
+    this.stopping = false;
+
+    if (!this.processing) {
+      this.setState('idle');
+    }
+  }
+
   private async handleQueueEvent(event: StreamingAudioQueueEvent): Promise<void> {
     switch (event.type) {
       case 'item_started':
