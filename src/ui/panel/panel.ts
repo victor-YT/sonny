@@ -5,13 +5,18 @@ const composerFormElement = queryRequired<HTMLFormElement>('#composer-form');
 const composerInputElement = queryRequired<HTMLInputElement>('#composer-input');
 const composerButtonElement = queryRequired<HTMLButtonElement>('#composer-button');
 
+console.log('[ui.panel] panel script loaded');
+
 void initializePanel();
 
 async function initializePanel(): Promise<void> {
+  console.log('[ui.panel] initializePanel start');
   renderStatus(await window.sonny.getStatus());
   renderConversation(await window.sonny.listConversation());
+  console.log('[ui.panel] initial status and conversation rendered');
 
   window.sonny.onStatusChanged((snapshot) => {
+    console.log(`[ui.panel] status changed status=${snapshot.status}`);
     renderStatus(snapshot);
   });
 
@@ -24,14 +29,25 @@ async function initializePanel(): Promise<void> {
       return;
     }
 
+    console.log(`[ui.panel] submit received messageLength=${message.length}`);
     composerButtonElement.disabled = true;
     composerInputElement.disabled = true;
 
     try {
+      console.log('[ui.panel] calling window.sonny.sendMessage');
       const response = await window.sonny.sendMessage(message);
+      console.log(
+        `[ui.panel] sendMessage resolved responseLength=${response.length}`,
+      );
       composerInputElement.value = '';
       appendMessage('user', message);
       appendMessage('assistant', response);
+    } catch (error: unknown) {
+      console.error('[ui.panel] sendMessage failed', error);
+      appendMessage(
+        'assistant',
+        `Message failed: ${toErrorMessage(error)}`,
+      );
     } finally {
       composerButtonElement.disabled = false;
       composerInputElement.disabled = false;
@@ -117,4 +133,12 @@ function queryRequired<T extends Element>(selector: string): T {
   }
 
   return element;
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown error';
 }

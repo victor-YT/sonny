@@ -1,5 +1,5 @@
 import { app, ipcMain } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Menubar } from 'menubar';
@@ -92,6 +92,7 @@ export class UiMainApp {
     | ((event: VoiceManagerEvent) => void)
     | undefined;
   private stopping = false;
+  private ipcRegistered = false;
 
   public constructor(config: UiMainAppConfig = {}) {
     this.preloadPath = join(__dirname, 'preload.js');
@@ -285,28 +286,46 @@ export class UiMainApp {
   }
 
   private resolvePanelUrl(): string {
-    const candidatePaths = [
-      join(__dirname, 'panel', 'index.html'),
-      join(process.cwd(), 'dist', 'ui', 'panel', 'index.html'),
-      join(process.cwd(), 'src', 'ui', 'panel', 'index.html'),
-    ];
+    const distPanelHtmlPath = join(__dirname, 'panel', 'index.html');
+    const sourcePanelHtmlPath = join(process.cwd(), 'src', 'ui', 'panel', 'index.html');
+    const builtPanelScriptPath = join(__dirname, 'panel', 'panel.js');
 
-    for (const candidatePath of candidatePaths) {
-      const exists = existsSync(candidatePath);
+    console.log(
+      `[ui.main] checked panel path ${distPanelHtmlPath} exists=${existsSync(distPanelHtmlPath)}`,
+    );
 
-      console.log(`[ui.main] checked panel path ${candidatePath} exists=${exists}`);
-
-      if (exists) {
-        return pathToFileURL(candidatePath).toString();
-      }
+    if (existsSync(distPanelHtmlPath)) {
+      return pathToFileURL(distPanelHtmlPath).toString();
     }
 
-    console.warn('[ui.main] no panel file found, using inline fallback HTML');
+    console.log(
+      `[ui.main] checked panel path ${sourcePanelHtmlPath} exists=${existsSync(sourcePanelHtmlPath)}`,
+    );
+    console.log(
+      `[ui.main] checked panel script path ${builtPanelScriptPath} exists=${existsSync(builtPanelScriptPath)}`,
+    );
+
+    if (existsSync(sourcePanelHtmlPath) && existsSync(builtPanelScriptPath)) {
+      console.log(
+        `[ui.main] using source panel html with built script ${builtPanelScriptPath}`,
+      );
+      return this.createPanelHtmlDataUrl(sourcePanelHtmlPath, builtPanelScriptPath);
+    }
+
+    console.warn('[ui.main] no usable panel assets found, using inline fallback HTML');
 
     return `data:text/html;charset=utf-8,${encodeURIComponent(INLINE_PANEL_HTML)}`;
   }
 
   private registerIpc(): void {
+    if (this.ipcRegistered) {
+      console.log('[ui.main] IPC handlers already registered');
+      return;
+    }
+
+    console.log('[ui.main] registering IPC handlers');
+    this.ipcRegistered = true;
+
     ipcMain.handle('ui:get-status', async () => this.status);
     ipcMain.handle(
       'ui:set-status',
@@ -330,11 +349,21 @@ export class UiMainApp {
     ipcMain.handle('ui:hide-capsule', async () => {
       this.capsuleWindow.hide();
     });
-    ipcMain.handle('gateway:list-conversation', async () => [...this.conversation]);
+    ipcMain.handle('gateway:list-conversation', async () => {
+      console.log(
+        `[ui.main] IPC gateway:list-conversation entries=${this.conversation.length}`,
+      );
+      return [...this.conversation];
+    });
     ipcMain.handle('gateway:send-message', async (_event, message: string) => {
       const trimmedMessage = message.trim();
 
+      console.log(
+        `[ui.main] IPC gateway:send-message received messageLength=${trimmedMessage.length}`,
+      );
+
       if (trimmedMessage.length === 0) {
+        console.log('[ui.main] ignoring empty gateway:send-message payload');
         return '';
       }
 
@@ -343,11 +372,19 @@ export class UiMainApp {
 
       try {
         const gateway = await this.ensureGateway();
+        console.log('[ui.main] gateway resolved for IPC send-message');
         const response = await gateway.chat(trimmedMessage);
+
+        console.log(
+          `[ui.main] gateway chat resolved responseLength=${response.length}`,
+        );
 
         this.appendConversation('assistant', response);
 
         return response;
+      } catch (error: unknown) {
+        console.error('[ui.main] gateway send-message failed', error);
+        throw error;
       } finally {
         await this.applyStatus('idle');
       }
@@ -465,7 +502,9 @@ export class UiMainApp {
 
   private async initializeGateway(): Promise<void> {
     try {
+      console.log('[ui.main] initializeGateway start');
       await this.ensureGateway();
+      console.log('[ui.main] initializeGateway resolved');
       this.seedConversationFromSession();
     } catch (error: unknown) {
       console.error('[ui.main] gateway initialization failed', error);
@@ -474,15 +513,20 @@ export class UiMainApp {
 
   private async ensureGateway(): Promise<Gateway> {
     if (this.gateway !== undefined) {
+      console.log('[ui.main] reusing initialized gateway');
       return this.gateway;
     }
 
     if (this.gatewayPromise === undefined) {
+      console.log('[ui.main] creating gateway promise');
       this.gatewayPromise = this.createDefaultGateway();
+    } else {
+      console.log('[ui.main] awaiting in-flight gateway promise');
     }
 
     try {
       this.gateway = await this.gatewayPromise;
+      console.log('[ui.main] gateway instance ready');
       return this.gateway;
     } finally {
       this.gatewayPromise = undefined;
@@ -491,21 +535,40 @@ export class UiMainApp {
 
   private async createDefaultGateway(): Promise<Gateway> {
     try {
+      console.log('[ui.main] createDefaultGateway start');
       const [{ Gateway }, { OllamaProvider }] = await Promise.all([
         import('../core/gateway.js'),
         import('../core/providers/ollama.js'),
       ]);
 
-      return new Gateway({
+      const gateway = new Gateway({
         llmProvider: new OllamaProvider(),
         sessionConfig: {
           systemPrompt: DEFAULT_SYSTEM_PROMPT,
         },
       });
+
+      console.log('[ui.main] createDefaultGateway complete');
+
+      return gateway;
     } catch (error: unknown) {
       console.error('[ui.main] failed to create default gateway', error);
       throw error;
     }
+  }
+
+  private createPanelHtmlDataUrl(
+    sourceHtmlPath: string,
+    builtPanelScriptPath: string,
+  ): string {
+    const sourceHtml = readFileSync(sourceHtmlPath, 'utf8');
+    const builtPanelScriptUrl = pathToFileURL(builtPanelScriptPath).toString();
+    const rewrittenHtml = sourceHtml.replace(
+      '<script type="module" src="./panel.js"></script>',
+      `<script type="module" src="${builtPanelScriptUrl}"></script>`,
+    );
+
+    return `data:text/html;charset=utf-8,${encodeURIComponent(rewrittenHtml)}`;
   }
 }
 
