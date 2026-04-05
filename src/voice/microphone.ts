@@ -1,4 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFile, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import type { VoiceCaptureResult } from './voice-manager.js';
 
@@ -39,10 +43,20 @@ export class Microphone {
   }
 
   public async capture(): Promise<VoiceCaptureResult> {
+    if (this.shouldUseFfmpeg()) {
+      const audioPromise = this.recordWithFfmpeg();
+
+      return {
+        audioPromise,
+        sttOptions: {
+          sampleRateHertz: this.sampleRateHertz,
+          channels: this.channels,
+        },
+      };
+    }
+
     const audioStream = new BufferAsyncIterable();
-    const audioPromise = this.shouldUseFfmpeg()
-      ? this.recordWithFfmpeg(audioStream)
-      : this.recordWithVad(audioStream);
+    const audioPromise = this.recordWithVad(audioStream);
 
     return {
       audioStream,
@@ -59,24 +73,29 @@ export class Microphone {
     return process.platform === 'darwin' && this.recordProgram === 'ffmpeg';
   }
 
-  private async recordWithFfmpeg(audioStream: BufferAsyncIterable): Promise<Buffer> {
+  private async recordWithFfmpeg(): Promise<Buffer> {
     const input = await this.resolveMacOsAudioInput();
+    const outputPath = join(tmpdir(), `sonny-mic-${randomUUID()}.wav`);
+    const durationSeconds = Math.max(1, Math.ceil(this.maxCaptureMs / 1000));
+    const args = [
+      '-y',
+      '-f', 'avfoundation',
+      '-i', input,
+      '-ar', String(this.sampleRateHertz),
+      '-ac', String(this.channels),
+      '-acodec', 'pcm_s16le',
+      '-t', String(durationSeconds),
+      outputPath,
+    ];
+
+    console.warn(`[mic] ffmpeg command: ${this.recordProgram} ${args.join(' ')}`);
 
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
 
       try {
-        child = spawn(this.recordProgram, [
-          '-hide_banner',
-          '-loglevel', 'warning',
-          '-f', 'avfoundation',
-          '-i', input,
-          '-ar', String(this.sampleRateHertz),
-          '-ac', String(this.channels),
-          '-f', 's16le',
-          'pipe:1',
-        ], {
-          stdio: ['ignore', 'pipe', 'pipe'],
+        child = spawn(this.recordProgram, args, {
+          stdio: ['ignore', 'ignore', 'pipe'],
         });
       } catch (error: unknown) {
         reject(
@@ -87,12 +106,47 @@ export class Microphone {
         return;
       }
 
-      this.consumeRecordingProcess({
-        child,
-        audioStream,
-        sourceName: 'ffmpeg',
-        resolve,
-        reject,
+      const stderrChunks: Buffer[] = [];
+
+      child.stderr?.on('data', (data: Buffer) => {
+        stderrChunks.push(data);
+        const message = data.toString().trim();
+
+        if (message.length > 0) {
+          console.warn('[mic] ffmpeg:', message);
+        }
+      });
+
+      child.on('error', async (err: Error) => {
+        await this.cleanupFile(outputPath);
+        reject(new Error(`Failed to start ffmpeg: ${err.message}`));
+      });
+
+      child.on('close', async (code: number | null) => {
+        if (code !== null && code !== 0) {
+          await this.cleanupFile(outputPath);
+          reject(new Error(
+            `ffmpeg exited with code ${code}: ${Buffer.concat(stderrChunks).toString('utf8').trim()}`,
+          ));
+          return;
+        }
+
+        try {
+          const fileStat = await stat(outputPath);
+          console.warn(`[mic] ffmpeg recorded file size: ${fileStat.size} bytes (${outputPath})`);
+
+          if (fileStat.size <= 0) {
+            throw new Error('[mic] ffmpeg recorded an empty audio file');
+          }
+
+          const wav = await readFile(outputPath);
+          const validated = this.finalizeRecordedWav(wav, 'ffmpeg');
+          resolve(validated);
+        } catch (error: unknown) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          await this.cleanupFile(outputPath);
+        }
       });
     });
   }
@@ -316,6 +370,10 @@ export class Microphone {
   private finalizeCapture(pcm: Buffer, sourceName: string): Buffer {
     const wav = this.wrapPcmAsWav(pcm);
 
+    return this.finalizeRecordedWav(wav, sourceName);
+  }
+
+  private finalizeRecordedWav(wav: Buffer, sourceName: string): Buffer {
     if (wav.byteLength <= MIN_CAPTURE_BYTES) {
       throw new Error(
         `[mic] ${sourceName} captured only ${wav.byteLength} bytes; microphone input appears empty`,
@@ -401,6 +459,14 @@ export class Microphone {
         resolve(Buffer.concat(stderrChunks).toString('utf8'));
       });
     });
+  }
+
+  private async cleanupFile(path: string): Promise<void> {
+    try {
+      await rm(path, { force: true });
+    } catch {
+      // best effort
+    }
   }
 
   private wrapPcmAsWav(pcm: Buffer): Buffer {
