@@ -19,6 +19,7 @@ import {
   StreamingAudioQueue,
   type StreamingAudioQueueEvent,
 } from './streaming-audio-queue.js';
+import { getThinkingSound } from './thinking-sounds.js';
 
 export type VoiceManagerState =
   | 'idle'
@@ -339,7 +340,12 @@ export class VoiceManager {
       });
 
       this.setState('thinking');
+      const thinkingSoundTask = this.playThinkingSound(sttResult.text, {
+        ...this.defaultTtsOptions,
+        ...options.tts,
+      });
       const response = await this.gateway.chat(sttResult.text);
+      await thinkingSoundTask;
 
       this.emit({
         type: 'response',
@@ -462,6 +468,27 @@ export class VoiceManager {
     }
 
     throw new Error('Voice capture did not provide any audio to transcribe');
+  }
+
+  private async playThinkingSound(
+    input: string,
+    options: TtsOptions,
+  ): Promise<void> {
+    const thinkingSound = getThinkingSound(input);
+
+    if (thinkingSound.trim().length === 0) {
+      return;
+    }
+
+    try {
+      const processedResponse = this.responseProcessor.process(thinkingSound);
+      await this.synthesizeForPlayback(processedResponse, options);
+    } catch (error: unknown) {
+      this.emit({
+        type: 'error',
+        error: this.toError(error, 'Thinking sound playback failed'),
+      });
+    }
   }
 
   private async synthesizeForPlayback(
