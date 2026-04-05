@@ -1,3 +1,16 @@
+process.on('uncaughtException', (err) => {
+  if (err.message && err.message.includes('sox')) {
+    console.warn('[voice] sox error suppressed:', err.message);
+    return;
+  }
+  console.error('Uncaught exception:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.warn('[voice] unhandled rejection suppressed:', reason);
+});
+
 import { once } from 'node:events';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
