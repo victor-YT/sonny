@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "pnpm run test:integration",
+    "test:integration": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js",
     "build": "tsc && tsc -p tsconfig.preload.json && pnpm run build:assets",
     "build:assets": "node dev/build-assets.cjs",
     "dev": "tsc --watch",
