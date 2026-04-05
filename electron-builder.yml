@@ -1,0 +1,12 @@
+appId: ai.sonny.app
+
+mac:
+  target:
+    - dmg
+    - zip
+
+win:
+  target: nsis
+
+directories:
+  output: release
