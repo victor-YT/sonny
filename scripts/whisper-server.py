@@ -110,7 +110,7 @@ app = FastAPI(title="Sonny faster-whisper service")
 service = WhisperService()
 
 
-@app.post("/transcribe")
+@app.post("/transcribe", response_model=None)
 async def transcribe(
     request: Request,
     stream: bool = Query(default=False),
