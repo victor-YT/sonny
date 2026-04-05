@@ -42,6 +42,27 @@ if (( ${#missing_scripts[@]} > 0 )); then
   exit 1
 fi
 
+child_pids=()
+
+cleanup() {
+  printf '\nStopping services...\n'
+
+  for pid in "${child_pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+    fi
+  done
+
+  for pid_file in "${PID_DIR}"/*.pid; do
+    [[ -f "${pid_file}" ]] && rm -f "${pid_file}"
+  done
+
+  wait 2>/dev/null || true
+  printf 'All services stopped.\n'
+}
+
+trap cleanup EXIT INT TERM
+
 for service in "${services[@]}"; do
   name="${service%%:*}"
   script_path="${service#*:}"
@@ -59,8 +80,12 @@ for service in "${services[@]}"; do
     rm -f "${pid_file}"
   fi
 
-  nohup "${PYTHON_BIN}" "${script_path}" >"${log_file}" 2>&1 &
+  "${PYTHON_BIN}" "${script_path}" >"${log_file}" 2>&1 &
   pid=$!
+  child_pids+=("${pid}")
   printf '%s' "${pid}" >"${pid_file}"
   printf 'Started %s (pid %s) log=%s\n' "${name}" "${pid}" "${log_file}"
 done
+
+printf 'All services running. Press Ctrl+C to stop.\n'
+wait
