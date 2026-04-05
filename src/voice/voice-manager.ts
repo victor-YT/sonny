@@ -209,15 +209,17 @@ export class VoiceManager {
       return undefined;
     }
 
-    const accessKey = runtimeConfig.voice.porcupine.accessKey;
+    const keywords = runtimeConfig.voice.porcupine.wakeWords.length > 0
+      ? runtimeConfig.voice.porcupine.wakeWords
+      : [runtimeConfig.voice.porcupine.wakeWord];
 
-    if (accessKey === undefined || accessKey.trim().length === 0) {
+    if (keywords.every((keyword) => keyword.trim().length === 0)) {
       return undefined;
     }
 
     return new PorcupineProvider({
-      accessKey,
-      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+      baseUrl: runtimeConfig.voice.porcupine.url,
+      keywords,
     });
   }
 
@@ -258,7 +260,7 @@ export class VoiceManager {
 
     try {
       await this.wakeWordProvider.start();
-      this.setState('listening');
+      this.setState(this.getRestingState());
     } catch (error: unknown) {
       this.wakeWordProvider.removeListener(this.wakeWordListener);
       await this.speaker?.stop();
@@ -464,7 +466,7 @@ export class VoiceManager {
 
   private async handleWakeWordEvent(event: WakeWordEvent): Promise<void> {
     if (event.type === 'ready') {
-      this.setState('listening');
+      this.setState(this.getRestingState());
       return;
     }
 

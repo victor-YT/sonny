@@ -48,7 +48,7 @@ export function loadStartupEnvironment(
   let chatterboxUrl: string | undefined;
 
   if (voiceMode) {
-    wakeWordUrl = readRequiredUrl(
+    wakeWordUrl = readOptionalUrl(
       environment,
       ['WAKE_WORD_URL', 'SONNY_WAKE_WORD_URL'],
       'WAKE_WORD_URL',
@@ -172,6 +172,35 @@ function readRequiredUrl(
   }
 
   return value;
+}
+
+function readOptionalUrl(
+  environment: NodeJS.ProcessEnv,
+  keys: string[],
+  label: string,
+  issues: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = environment[key]?.trim();
+
+    if (value === undefined || value.length === 0) {
+      continue;
+    }
+
+    try {
+      const parsed = new URL(value);
+
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        issues.push(`${label} must use http:// or https://.`);
+      }
+    } catch {
+      issues.push(`${label} must be a valid URL.`);
+    }
+
+    return value;
+  }
+
+  return undefined;
 }
 
 function readRequiredBoolean(

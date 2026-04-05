@@ -11,11 +11,7 @@ import { Microphone, type MicrophoneConfig } from './microphone.js';
 import { PorcupineProvider } from './providers/porcupine.js';
 import type { SttOptions, SttProvider } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
-import type {
-  WakeWordEvent,
-  WakeWordListener,
-  WakeWordProvider,
-} from './providers/wake-word.js';
+import type { WakeWordProvider } from './providers/wake-word.js';
 import { Speaker, type SpeakerConfig } from './speaker.js';
 import { VoiceManager, type VoiceManagerState } from './voice-manager.js';
 
@@ -30,7 +26,6 @@ const DEFAULT_VAD_SILENCE_SECONDS = 30;
 const PROJECT_ROOT = process.cwd();
 const WHISPER_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'whisper-server.py');
 const TTS_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'qwen3-tts-server.py');
-const WAKE_WORD_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'wake-word-server.py');
 
 export interface VoiceGatewayConfig {
   gateway: Gateway;
@@ -51,6 +46,7 @@ export interface VoiceGatewayConfig {
 export interface VoiceEnvironmentConfig {
   ollamaBaseUrl?: string;
   ollamaModel?: string;
+  wakeWordUrl?: string;
   porcupineAccessKey?: string;
   porcupineWakeWord?: string;
   wakeWords?: string[];
@@ -77,12 +73,6 @@ interface ManagedProcessHandle {
   child: ChildProcess;
   stdout: ReadLineInterface;
   stderr: ReadLineInterface;
-}
-
-interface ManagedWakeWordEvent {
-  type: 'ready' | 'detected' | 'error';
-  keyword?: string;
-  error?: string;
 }
 
 interface RecorderOptions {
@@ -233,48 +223,29 @@ export class VoiceGateway {
       return config.wakeWordProvider;
     }
 
-    if (environmentConfig !== undefined) {
-      const accessKey =
-        environmentConfig.porcupineAccessKey ??
-        process.env.PORCUPINE_ACCESS_KEY ??
-        process.env.SONNY_PORCUPINE_ACCESS_KEY;
-      const keywords = environmentConfig.wakeWords?.length
-        ? environmentConfig.wakeWords
+    if (runtimeConfig === undefined && environmentConfig === undefined) {
+      return undefined;
+    }
+
+    const keywords = environmentConfig?.wakeWords?.length
+      ? environmentConfig.wakeWords
+      : runtimeConfig?.voice.porcupine.wakeWords.length
+        ? runtimeConfig.voice.porcupine.wakeWords
         : [
-            environmentConfig.porcupineWakeWord ??
+            environmentConfig?.porcupineWakeWord ??
             runtimeConfig?.voice.porcupine.wakeWord ??
             'porcupine',
           ];
 
-      if (accessKey === undefined || accessKey.trim().length === 0) {
-        throw new Error('Porcupine access key is required to start managed voice mode.');
-      }
-
-      return new ManagedWakeWordProvider({
-        pythonCommand: this.pythonCommand,
-        scriptPath: WAKE_WORD_SERVER_SCRIPT,
-        accessKey,
-        keywords,
-        modelPath: environmentConfig.porcupineModelPath,
-        sensitivity: environmentConfig.wakeWordSensitivity,
-        audioDeviceIndex: environmentConfig.audioDeviceIndex,
-        startupTimeoutMs: this.serviceStartupTimeoutMs,
-      });
-    }
-
-    if (runtimeConfig === undefined) {
-      return undefined;
-    }
-
-    const accessKey = runtimeConfig.voice.porcupine.accessKey;
-
-    if (accessKey === undefined || accessKey.trim().length === 0) {
+    if (keywords.every((keyword) => keyword.trim().length === 0)) {
       return undefined;
     }
 
     return new PorcupineProvider({
-      accessKey,
-      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+      baseUrl:
+        environmentConfig?.wakeWordUrl ??
+        runtimeConfig?.voice.porcupine.url,
+      keywords,
     });
   }
 
@@ -427,6 +398,8 @@ export function createVoiceGatewayFromEnvironment(
         runtimeConfig.voice.porcupine.wakeWord ??
         'porcupine',
       ];
+  const resolvedWakeWordUrl =
+    config.wakeWordUrl ?? runtimeConfig.voice.porcupine.url;
   const resolvedAccessKey =
     config.porcupineAccessKey ?? runtimeConfig.voice.porcupine.accessKey;
   const resolvedMicSampleRate =
@@ -449,7 +422,7 @@ export function createVoiceGatewayFromEnvironment(
           url: config.ttsBaseUrl ?? runtimeConfig.voice.chatterbox.url,
         },
         porcupine: {
-          url: runtimeConfig.voice.porcupine.url,
+          url: resolvedWakeWordUrl,
           accessKey: resolvedAccessKey,
           wakeWord: resolvedWakeWords[0] ?? runtimeConfig.voice.porcupine.wakeWord,
           wakeWords: resolvedWakeWords,
@@ -458,6 +431,7 @@ export function createVoiceGatewayFromEnvironment(
     },
     environmentConfig: {
       ...config,
+      wakeWordUrl: resolvedWakeWordUrl,
       porcupineAccessKey: resolvedAccessKey,
       wakeWords: resolvedWakeWords,
       micSampleRateHertz: resolvedMicSampleRate,
@@ -492,6 +466,9 @@ export function readVoiceEnvironmentConfig(
     ollamaModel:
       environment.OLLAMA_MODEL ??
       environment.SONNY_OLLAMA_MODEL,
+    wakeWordUrl:
+      environment.WAKE_WORD_URL ??
+      environment.SONNY_WAKE_WORD_URL,
     porcupineAccessKey:
       environment.PORCUPINE_ACCESS_KEY ??
       environment.SONNY_PORCUPINE_ACCESS_KEY,
@@ -561,227 +538,6 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   }
 
   return parsed;
-}
-
-class ManagedWakeWordProvider implements WakeWordProvider {
-  public readonly name = 'managed-wake-word';
-
-  private readonly pythonCommand: string;
-  private readonly scriptPath: string;
-  private readonly accessKey: string;
-  private readonly keywords: string[];
-  private readonly modelPath: string | undefined;
-  private readonly sensitivity: number | undefined;
-  private readonly audioDeviceIndex: number | undefined;
-  private readonly startupTimeoutMs: number;
-  private readonly listeners = new Set<WakeWordListener>();
-
-  private processHandle: ManagedProcessHandle | undefined;
-  private listening = false;
-  private stopping = false;
-
-  public constructor(config: {
-    pythonCommand: string;
-    scriptPath: string;
-    accessKey: string;
-    keywords: string[];
-    modelPath?: string;
-    sensitivity?: number;
-    audioDeviceIndex?: number;
-    startupTimeoutMs: number;
-  }) {
-    this.pythonCommand = config.pythonCommand;
-    this.scriptPath = config.scriptPath;
-    this.accessKey = config.accessKey;
-    this.keywords = config.keywords;
-    this.modelPath = config.modelPath;
-    this.sensitivity = config.sensitivity;
-    this.audioDeviceIndex = config.audioDeviceIndex;
-    this.startupTimeoutMs = config.startupTimeoutMs;
-  }
-
-  public get isListening(): boolean {
-    return this.listening;
-  }
-
-  public onDetection(listener: WakeWordListener): void {
-    this.listeners.add(listener);
-  }
-
-  public removeListener(listener: WakeWordListener): void {
-    this.listeners.delete(listener);
-  }
-
-  public async start(): Promise<void> {
-    if (this.processHandle !== undefined) {
-      return;
-    }
-
-    this.stopping = false;
-    const processHandle = spawnManagedProcess({
-      name: 'wake-word',
-      pythonCommand: this.pythonCommand,
-      scriptPath: this.scriptPath,
-      environment: this.buildEnvironment(),
-    });
-    const readyPromise = this.waitForReady(processHandle);
-
-    this.processHandle = processHandle;
-
-    try {
-      await Promise.race([
-        readyPromise,
-        delay(this.startupTimeoutMs).then(() => {
-          throw new Error('Wake-word service did not become ready before the startup timeout.');
-        }),
-      ]);
-      this.listening = true;
-    } catch (error: unknown) {
-      await stopManagedProcess(processHandle);
-      this.processHandle = undefined;
-      throw error;
-    }
-  }
-
-  public async stop(): Promise<void> {
-    this.stopping = true;
-    this.listening = false;
-
-    const processHandle = this.processHandle;
-
-    this.processHandle = undefined;
-
-    if (processHandle !== undefined) {
-      await stopManagedProcess(processHandle);
-    }
-
-    this.stopping = false;
-  }
-
-  private buildEnvironment(): Record<string, string> {
-    const environment: Record<string, string> = {
-      PORCUPINE_ACCESS_KEY: this.accessKey,
-      SONNY_WAKE_WORDS: this.keywords.join(','),
-    };
-
-    if (this.modelPath !== undefined) {
-      environment.SONNY_PORCUPINE_MODEL_PATH = this.modelPath;
-    }
-
-    if (this.sensitivity !== undefined) {
-      environment.SONNY_WAKE_WORD_SENSITIVITY = this.sensitivity.toString();
-    }
-
-    if (this.audioDeviceIndex !== undefined) {
-      environment.SONNY_AUDIO_DEVICE_INDEX = this.audioDeviceIndex.toString();
-    }
-
-    return environment;
-  }
-
-  private async waitForReady(processHandle: ManagedProcessHandle): Promise<void> {
-    const readyListener = async (line: string): Promise<void> => {
-      const event = this.parseEvent(line);
-
-      if (event === undefined) {
-        return;
-      }
-
-      if (event.type === 'ready') {
-        this.emit({
-          type: 'ready',
-          timestamp: Date.now(),
-        });
-        return;
-      }
-
-      if (event.type === 'detected') {
-        this.emit({
-          type: 'detected',
-          keyword: event.keyword,
-          timestamp: Date.now(),
-        });
-        return;
-      }
-
-      if (event.type === 'error') {
-        const providerError = new Error(event.error ?? 'Wake-word service failed');
-
-        this.emit({
-          type: 'error',
-          error: providerError,
-          timestamp: Date.now(),
-        });
-
-        if (!this.stopping) {
-          throw providerError;
-        }
-      }
-    };
-
-    const linePromise = new Promise<void>((resolve, reject) => {
-      processHandle.stdout.on('line', (line) => {
-        void readyListener(line).then(() => {
-          const event = this.parseEvent(line);
-
-          if (event?.type === 'ready') {
-            resolve();
-          }
-        }).catch(reject);
-      });
-      processHandle.child.once('exit', (code, signal) => {
-        if (!this.stopping) {
-          reject(
-            new Error(
-              `Wake-word service exited before readiness with code ${code ?? 'unknown'} and signal ${signal ?? 'none'}.`,
-            ),
-          );
-        }
-      });
-    });
-
-    await linePromise;
-  }
-
-  private parseEvent(line: string): ManagedWakeWordEvent | undefined {
-    let payload: unknown;
-
-    try {
-      payload = JSON.parse(line) as unknown;
-    } catch {
-      return undefined;
-    }
-
-    if (!isRecord(payload) || typeof payload.type !== 'string') {
-      return undefined;
-    }
-
-    if (payload.type === 'ready') {
-      return { type: 'ready' };
-    }
-
-    if (payload.type === 'detected') {
-      return {
-        type: 'detected',
-        keyword: typeof payload.keyword === 'string' ? payload.keyword : undefined,
-      };
-    }
-
-    if (payload.type === 'error') {
-      return {
-        type: 'error',
-        error: typeof payload.error === 'string' ? payload.error : undefined,
-      };
-    }
-
-    return undefined;
-  }
-
-  private emit(event: WakeWordEvent): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-  }
 }
 
 class PlaybackVadMonitor {
