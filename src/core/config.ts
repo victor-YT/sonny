@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import type { PermissionLevel } from '../skills/permissions.js';
 import { ConfigValidationError, validateConfig } from './config-validator.js';
 
+export type RuntimePlatform = NodeJS.Platform;
+
 export interface OllamaRuntimeConfig {
   baseUrl: string;
   model: string;
@@ -51,6 +53,31 @@ export interface RuntimeConfig {
 }
 
 export const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'data', 'config.json');
+export const DEFAULT_RUNTIME_PLATFORM: RuntimePlatform = process.platform;
+
+export function detectRuntimePlatform(
+  platform: RuntimePlatform = DEFAULT_RUNTIME_PLATFORM,
+): RuntimePlatform {
+  return platform;
+}
+
+export function isWindowsPlatform(
+  platform: RuntimePlatform = DEFAULT_RUNTIME_PLATFORM,
+): boolean {
+  return detectRuntimePlatform(platform) === 'win32';
+}
+
+export function isMacOSPlatform(
+  platform: RuntimePlatform = DEFAULT_RUNTIME_PLATFORM,
+): boolean {
+  return detectRuntimePlatform(platform) === 'darwin';
+}
+
+export function isLinuxPlatform(
+  platform: RuntimePlatform = DEFAULT_RUNTIME_PLATFORM,
+): boolean {
+  return detectRuntimePlatform(platform) === 'linux';
+}
 
 export function loadConfigFile(configPath: string = DEFAULT_CONFIG_PATH): unknown {
   let fileContents: string;

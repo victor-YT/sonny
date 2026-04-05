@@ -345,17 +345,17 @@ export class UiMainApp {
           }
 
           responseChunks.push(chunk.text);
-          this.broadcastStreamToken(chunk.text);
+          this.broadcastToken(chunk.text);
         }
 
         const response = responseChunks.join('');
 
         console.log(
-          `[ui.main] gateway chat resolved responseLength=${response.length}`,
+          `[ui.main] gateway streamChat resolved responseLength=${response.length}`,
         );
 
         this.appendConversation('assistant', response);
-        this.broadcastStreamEnd(response);
+        this.broadcastTokenEnd(response);
 
         return response;
       } catch (error: unknown) {
@@ -400,12 +400,16 @@ export class UiMainApp {
     );
   }
 
-  private broadcastStreamToken(token: string): void {
-    this.menubarApp?.window?.webContents.send('gateway:stream-token', token);
+  private broadcastToken(token: string): void {
+    const win = this.menubarApp?.window;
+
+    win?.webContents.send('token', token);
   }
 
-  private broadcastStreamEnd(response: string): void {
-    this.menubarApp?.window?.webContents.send('gateway:stream-end', response);
+  private broadcastTokenEnd(response: string): void {
+    const win = this.menubarApp?.window;
+
+    win?.webContents.send('token-end', response);
   }
 
   private appendConversation(

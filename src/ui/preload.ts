@@ -32,7 +32,8 @@ export interface SonnyBridge {
   onVoiceModeChanged(
     listener: (snapshot: UiVoiceModeSnapshot) => void,
   ): () => void;
-  onStreamToken(listener: (token: string) => void): () => void;
+  onToken(listener: (token: string) => void): () => void;
+  onTokenEnd(listener: (message: string) => void): () => void;
 }
 
 const sonnyBridge: SonnyBridge = {
@@ -79,7 +80,7 @@ const sonnyBridge: SonnyBridge = {
       ipcRenderer.removeListener('ui:voice-mode-changed', wrappedListener);
     };
   },
-  onStreamToken: (listener) => {
+  onToken: (listener) => {
     const wrappedListener = (
       _event: Electron.IpcRendererEvent,
       token: string,
@@ -87,10 +88,24 @@ const sonnyBridge: SonnyBridge = {
       listener(token);
     };
 
-    ipcRenderer.on('gateway:stream-token', wrappedListener);
+    ipcRenderer.on('token', wrappedListener);
 
     return () => {
-      ipcRenderer.removeListener('gateway:stream-token', wrappedListener);
+      ipcRenderer.removeListener('token', wrappedListener);
+    };
+  },
+  onTokenEnd: (listener) => {
+    const wrappedListener = (
+      _event: Electron.IpcRendererEvent,
+      message: string,
+    ) => {
+      listener(message);
+    };
+
+    ipcRenderer.on('token-end', wrappedListener);
+
+    return () => {
+      ipcRenderer.removeListener('token-end', wrappedListener);
     };
   },
 };

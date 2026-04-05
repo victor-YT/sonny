@@ -112,6 +112,7 @@ export class Qwen3TTSProvider implements TtsProvider {
         ...this.headers,
       },
       body: JSON.stringify(this.buildPayload(text, options, stream)),
+      signal: options.signal,
     });
   }
 
@@ -126,6 +127,7 @@ export class Qwen3TTSProvider implements TtsProvider {
     };
 
     if (options.voice !== undefined) {
+      payload.speaker = options.voice;
       payload.voice = options.voice;
     }
 
@@ -148,17 +150,29 @@ export class Qwen3TTSProvider implements TtsProvider {
     input: string,
     init: RequestInit,
   ): Promise<Response> {
-    const controller = new AbortController();
+    const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => {
-      controller.abort();
+      timeoutController.abort();
     }, this.timeoutMs);
+    const requestSignal = init.signal ?? undefined;
+    const signal = requestSignal === undefined
+      ? timeoutController.signal
+      : AbortSignal.any([requestSignal, timeoutController.signal]);
 
     try {
       return await fetch(input, {
         ...init,
-        signal: controller.signal,
+        signal,
       });
     } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        error.name === 'AbortError' &&
+        !timeoutController.signal.aborted
+      ) {
+        throw error;
+      }
+
       if (
         error instanceof Error &&
         error.name === 'AbortError'
