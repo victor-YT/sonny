@@ -349,7 +349,10 @@ export class VoiceGateway {
       });
     } catch (error: unknown) {
       this.playbackVadMonitor = undefined;
-      throw error;
+      console.warn(
+        'Failed to start playback VAD monitor, speech interruption disabled for this playback:',
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 
@@ -579,7 +582,16 @@ class PlaybackVadMonitor {
     this.started = true;
     this.onSpeech = onSpeech;
     this.recorder = await this.createRecorder();
-    this.source = this.recorder.stream();
+
+    try {
+      this.source = this.recorder.stream();
+    } catch {
+      console.warn(
+        'PlaybackVadMonitor: recording not ready, skipping VAD monitor.',
+      );
+      await this.stop();
+      return;
+    }
 
     this.source.on('data', (chunk: unknown) => {
       void this.handleChunk(chunk);
