@@ -4,9 +4,12 @@ import type { VoiceCaptureResult } from './voice-manager.js';
 
 const DEFAULT_SAMPLE_RATE_HERTZ = 16_000;
 const DEFAULT_CHANNELS = 1;
-const DEFAULT_MAX_CAPTURE_MS = 15_000;
+const DEFAULT_MAX_CAPTURE_MS = 8_000;
 const DEFAULT_RECORD_PROGRAM = 'sox';
-const DEFAULT_SILENCE_SECONDS = 1;
+const DEFAULT_VAD_URL = 'http://127.0.0.1:8003';
+const DEFAULT_VAD_POLL_MS = 100;
+const DEFAULT_SPEECH_THRESHOLD_MS = 500;
+const DEFAULT_SILENCE_THRESHOLD_MS = 1_500;
 
 export interface MicrophoneConfig {
   sampleRateHertz?: number;
@@ -16,27 +19,27 @@ export interface MicrophoneConfig {
   maxCaptureMs?: number;
   recordProgram?: string;
   readyDelayMs?: number;
+  vadUrl?: string;
 }
 
 export class Microphone {
   private readonly sampleRateHertz: number;
   private readonly channels: number;
-  private readonly silenceSeconds: number;
   private readonly maxCaptureMs: number;
   private readonly recordProgram: string;
+  private readonly vadUrl: string;
 
   public constructor(config: MicrophoneConfig = {}) {
     this.sampleRateHertz = config.sampleRateHertz ?? DEFAULT_SAMPLE_RATE_HERTZ;
     this.channels = config.channels ?? DEFAULT_CHANNELS;
-    this.silenceSeconds = config.silenceSeconds ?? DEFAULT_SILENCE_SECONDS;
     this.maxCaptureMs = config.maxCaptureMs ?? DEFAULT_MAX_CAPTURE_MS;
     this.recordProgram = config.recordProgram ?? DEFAULT_RECORD_PROGRAM;
+    this.vadUrl = config.vadUrl ?? DEFAULT_VAD_URL;
   }
 
   public async capture(): Promise<VoiceCaptureResult> {
-    const maxSeconds = Math.ceil(this.maxCaptureMs / 1000);
     const audioStream = new BufferAsyncIterable();
-    const audioPromise = this.recordWithSox(maxSeconds, audioStream);
+    const audioPromise = this.recordWithVad(audioStream);
 
     return {
       audioStream,
@@ -49,25 +52,19 @@ export class Microphone {
     };
   }
 
-  private recordWithSox(
-    maxSeconds: number,
-    audioStream: BufferAsyncIterable,
-  ): Promise<Buffer> {
+  private recordWithVad(audioStream: BufferAsyncIterable): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
 
       try {
         child = spawn(this.recordProgram, [
-          '-d',                       // default audio input
+          '-d',
           '-r', String(this.sampleRateHertz),
           '-c', String(this.channels),
-          '-b', '16',                 // 16-bit samples
+          '-b', '16',
           '-e', 'signed-integer',
-          '-t', 'raw',                // raw PCM for streaming STT
-          '-',                        // write to stdout
-          'trim', '0', String(maxSeconds),
-          'silence', '1', '0.1', '1%',
-          '1', this.silenceSeconds.toFixed(1), '1%',
+          '-t', 'raw',
+          '-',
         ], {
           stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -80,8 +77,22 @@ export class Microphone {
         return;
       }
 
-      const chunks: Buffer[] = [];
+      const allChunks: Buffer[] = [];
+      let pendingVadChunk = Buffer.alloc(0);
       let settled = false;
+      let speechStarted = false;
+      let speechMs = 0;
+      let silenceMs = 0;
+      const vadUrl = `${this.vadUrl}/detect`;
+      let vadBusy = false;
+
+      const killChild = (): void => {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // already exited
+        }
+      };
 
       const finish = (result: Buffer | Error): void => {
         if (settled) {
@@ -98,20 +109,86 @@ export class Microphone {
         }
       };
 
-      const killTimeout = setTimeout(() => {
-        if (!settled) {
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            // already exited
-          }
+      const stopRecording = (): void => {
+        if (settled) {
+          return;
         }
-      }, this.maxCaptureMs + 2000);
+
+        audioStream.end();
+        const wav = this.wrapPcmAsWav(Buffer.concat(allChunks));
+        killChild();
+        finish(wav);
+      };
+
+      const maxTimeout = setTimeout(() => {
+        if (!settled) {
+          console.warn('[mic] max capture timeout reached, stopping.');
+          stopRecording();
+        }
+      }, this.maxCaptureMs + 1000);
+
+      const checkVad = async (pcmChunk: Buffer): Promise<void> => {
+        if (vadBusy || settled) {
+          return;
+        }
+
+        vadBusy = true;
+
+        try {
+          const response = await fetch(vadUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: pcmChunk,
+          });
+
+          if (!response.ok) {
+            vadBusy = false;
+            return;
+          }
+
+          const result = await response.json() as { speech: boolean };
+
+          if (result.speech) {
+            speechMs += DEFAULT_VAD_POLL_MS;
+            silenceMs = 0;
+
+            if (speechMs >= DEFAULT_SPEECH_THRESHOLD_MS) {
+              speechStarted = true;
+            }
+          } else {
+            if (speechStarted) {
+              silenceMs += DEFAULT_VAD_POLL_MS;
+
+              if (silenceMs >= DEFAULT_SILENCE_THRESHOLD_MS) {
+                console.warn('[mic] silence detected after speech, stopping.');
+                stopRecording();
+              }
+            }
+          }
+        } catch {
+          // VAD service unavailable, fall back to max timeout
+        } finally {
+          vadBusy = false;
+        }
+      };
 
       if (child.stdout !== null) {
         child.stdout.on('data', (chunk: Buffer) => {
-          chunks.push(chunk);
+          if (settled) {
+            return;
+          }
+
+          allChunks.push(chunk);
           audioStream.push(chunk);
+
+          pendingVadChunk = Buffer.concat([pendingVadChunk, chunk]);
+          const bytesPerPoll = 2 * this.sampleRateHertz * DEFAULT_VAD_POLL_MS / 1000;
+
+          if (pendingVadChunk.length >= bytesPerPoll) {
+            const vadChunk = pendingVadChunk;
+            pendingVadChunk = Buffer.alloc(0);
+            void checkVad(vadChunk);
+          }
         });
 
         child.stdout.on('error', (err: Error) => {
@@ -130,20 +207,24 @@ export class Microphone {
       }
 
       child.on('error', (err: Error) => {
-        clearTimeout(killTimeout);
+        clearTimeout(maxTimeout);
         finish(new Error(`Failed to start ${this.recordProgram}: ${err.message}`));
       });
 
       child.on('close', (code: number | null) => {
-        clearTimeout(killTimeout);
+        clearTimeout(maxTimeout);
 
-        if (chunks.length === 0) {
+        if (settled) {
+          return;
+        }
+
+        if (allChunks.length === 0) {
           finish(new Error(`sox exited with code ${code} and produced no audio`));
           return;
         }
 
         audioStream.end();
-        const wav = this.wrapPcmAsWav(Buffer.concat(chunks));
+        const wav = this.wrapPcmAsWav(Buffer.concat(allChunks));
 
         if (code !== null && code !== 0) {
           console.warn(`[mic] sox exited with code ${code}, returning captured audio.`);

@@ -54,12 +54,15 @@ is_pid_running() {
 
 STT_BASE_URL="$(normalize_base_url "${FASTER_WHISPER_URL:-http://127.0.0.1:8000}")"
 TTS_BASE_URL="$(normalize_base_url "${CHATTERBOX_URL:-http://127.0.0.1:8001}")"
+VAD_BASE_URL="$(normalize_base_url "${VAD_URL:-http://127.0.0.1:8003}")"
 STT_PORT="$(extract_port_from_url "${STT_BASE_URL}")"
 TTS_PORT="$(extract_port_from_url "${TTS_BASE_URL}")"
+VAD_PORT="$(extract_port_from_url "${VAD_BASE_URL}")"
 
 services=(
   "whisper:${PROJECT_ROOT}/scripts/whisper-server.py:${STT_PORT}"
   "qwen3-tts:${PROJECT_ROOT}/scripts/qwen3-tts-server.py:${TTS_PORT}"
+  "vad:${PROJECT_ROOT}/scripts/vad-server.py:${VAD_PORT}"
   "wake-word:${PROJECT_ROOT}/scripts/wake-word-server.py:"
 )
 
