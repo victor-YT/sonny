@@ -2,7 +2,6 @@ import type { TtsOptions, TtsProvider } from './tts.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8001';
 const DEFAULT_SYNTHESIZE_PATH = '/synthesize';
-const DEFAULT_STREAM_PATH = '/synthesize/stream';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 interface Qwen3TtsJsonResponse {
@@ -12,18 +11,16 @@ interface Qwen3TtsJsonResponse {
 export interface Qwen3TtsConfig {
   baseUrl?: string;
   synthesizePath?: string;
-  streamPath?: string;
   timeoutMs?: number;
   headers?: Record<string, string>;
 }
 
 export class Qwen3TTSProvider implements TtsProvider {
   public readonly name = 'qwen3-tts';
-  public readonly supportsStreaming = true;
+  public readonly supportsStreaming = false;
 
   private readonly baseUrl: string;
   private readonly synthesizePath: string;
-  private readonly streamPath: string;
   private readonly timeoutMs: number;
   private readonly headers: Record<string, string>;
 
@@ -32,7 +29,6 @@ export class Qwen3TTSProvider implements TtsProvider {
     this.synthesizePath = this.normalizePath(
       config.synthesizePath ?? DEFAULT_SYNTHESIZE_PATH,
     );
-    this.streamPath = this.normalizePath(config.streamPath ?? DEFAULT_STREAM_PATH);
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.headers = config.headers ?? {};
   }
@@ -41,7 +37,7 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): Promise<Buffer> {
-    const response = await this.request(this.synthesizePath, text, options, false);
+    const response = await this.request(this.synthesizePath, text, options);
 
     if (!response.ok) {
       throw new Error(await this.buildHttpError(response));
@@ -54,49 +50,7 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): AsyncIterable<Buffer> {
-    let response: Response;
-
-    try {
-      response = await this.request(this.streamPath, text, options, true);
-    } catch {
-      yield await this.synthesize(text, options);
-      return;
-    }
-
-    if (!response.ok) {
-      yield await this.synthesize(text, options);
-      return;
-    }
-
-    const contentType = response.headers.get('content-type') ?? '';
-
-    if (contentType.includes('application/json')) {
-      yield await this.readAudioResponse(response);
-      return;
-    }
-
-    if (response.body === null) {
-      yield await this.readAudioResponse(response);
-      return;
-    }
-
-    const reader = response.body.getReader();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          break;
-        }
-
-        if (value !== undefined && value.byteLength > 0) {
-          yield Buffer.from(value);
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    yield await this.synthesize(text, options);
   }
 
   private normalizeBaseUrl(baseUrl: string): string {
@@ -111,7 +65,6 @@ export class Qwen3TTSProvider implements TtsProvider {
     path: string,
     text: string,
     options: TtsOptions,
-    stream: boolean,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: 'POST',
@@ -119,7 +72,7 @@ export class Qwen3TTSProvider implements TtsProvider {
         'content-type': 'application/json',
         ...this.headers,
       },
-      body: JSON.stringify(this.buildPayload(text, options, stream)),
+      body: JSON.stringify(this.buildPayload(text, options)),
       signal: options.signal,
     });
   }
@@ -127,11 +80,9 @@ export class Qwen3TTSProvider implements TtsProvider {
   private buildPayload(
     text: string,
     options: TtsOptions,
-    stream: boolean,
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = {
       text,
-      stream,
     };
 
     if (options.voice !== undefined) {
