@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist/ui",
+    "rootDir": "src/ui",
+    "declaration": false,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "src/ui/preload.ts"
+  ]
+}

@@ -562,10 +562,10 @@ export class UiMainApp {
     builtPanelScriptPath: string,
   ): string {
     const sourceHtml = readFileSync(sourceHtmlPath, 'utf8');
-    const builtPanelScriptUrl = pathToFileURL(builtPanelScriptPath).toString();
+    const builtPanelScript = readFileSync(builtPanelScriptPath, 'utf8');
     const rewrittenHtml = sourceHtml.replace(
       '<script type="module" src="./panel.js"></script>',
-      `<script type="module" src="${builtPanelScriptUrl}"></script>`,
+      `<script type="module">\n${builtPanelScript}\n</script>`,
     );
 
     return `data:text/html;charset=utf-8,${encodeURIComponent(rewrittenHtml)}`;
