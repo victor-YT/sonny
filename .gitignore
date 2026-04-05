@@ -11,3 +11,5 @@ dev/
 *.tsbuildinfo
 data/memory/
 data/memory/*.sqlite
+
+dist-test/
