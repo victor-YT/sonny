@@ -202,8 +202,8 @@ export class VoiceManager {
     }
 
     return new PorcupineProvider({
-      accessKey: runtimeConfig.voice.porcupine.accessKey,
-      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+      baseUrl: runtimeConfig.voice.porcupine.url,
+      keywords: runtimeConfig.voice.porcupine.wakeWords,
     });
   }
 

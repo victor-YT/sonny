@@ -11,8 +11,11 @@
       "url": "http://127.0.0.1:8001"
     },
     "porcupine": {
-      "accessKey": "test-access-key",
-      "wakeWord": "sonny"
+      "url": "http://127.0.0.1:8002",
+      "wakeWords": [
+        "hey jarvis",
+        "alexa"
+      ]
     }
   },
   "memory": {

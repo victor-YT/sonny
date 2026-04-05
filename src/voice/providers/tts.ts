@@ -10,6 +10,7 @@ export interface TtsOptions {
   speed?: number;
   emotion?: TtsEmotion;
   exaggeration?: number;
+  signal?: AbortSignal;
 }
 
 export type TtsEmotion = 'neutral' | 'happy' | 'sad' | 'excited' | 'calm';

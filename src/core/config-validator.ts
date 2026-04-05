@@ -59,17 +59,17 @@ export function validateConfig(value: unknown): RuntimeConfig {
         url: readUrl(chatterbox, 'config.voice.chatterbox.url', issues, 'url'),
       },
       porcupine: {
-        accessKey: readString(
+        url: readUrl(
           porcupine,
-          'config.voice.porcupine.accessKey',
+          'config.voice.porcupine.url',
           issues,
-          'accessKey',
+          'url',
         ),
-        wakeWord: readString(
+        wakeWords: readStringArray(
           porcupine,
-          'config.voice.porcupine.wakeWord',
+          'config.voice.porcupine.wakeWords',
           issues,
-          'wakeWord',
+          'wakeWords',
         ),
       },
     },
@@ -196,6 +196,35 @@ function readUrl(
   }
 
   return value;
+}
+
+function readStringArray(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): string[] {
+  const value = readNestedValue(root, path, issues, ...segments);
+
+  if (!Array.isArray(value)) {
+    issues.push(`${path} must be an array of non-empty strings.`);
+    return [];
+  }
+
+  const normalizedValues = value.flatMap((entry) => {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      issues.push(`${path} must contain only non-empty strings.`);
+      return [];
+    }
+
+    return [entry.trim()];
+  });
+
+  if (normalizedValues.length === 0) {
+    issues.push(`${path} must contain at least one wake word.`);
+  }
+
+  return normalizedValues;
 }
 
 function readPositiveInteger(

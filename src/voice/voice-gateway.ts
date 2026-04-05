@@ -27,12 +27,9 @@ export interface VoiceGatewayConfig {
 export interface VoiceEnvironmentConfig {
   ollamaBaseUrl?: string;
   ollamaModel?: string;
-  porcupineAccessKey?: string;
-  porcupineWakeWord?: string;
+  wakeWordUrl?: string;
+  wakeWord?: string;
   wakeWords?: string[];
-  porcupineModelPath?: string;
-  wakeWordSensitivity?: number;
-  audioDeviceIndex?: number;
   sttBaseUrl?: string;
   ttsBaseUrl?: string;
   sttLanguage?: string;
@@ -114,8 +111,8 @@ export class VoiceGateway {
     }
 
     return new PorcupineProvider({
-      accessKey: runtimeConfig.voice.porcupine.accessKey,
-      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+      baseUrl: runtimeConfig.voice.porcupine.url,
+      keywords: runtimeConfig.voice.porcupine.wakeWords,
     });
   }
 }
@@ -128,9 +125,11 @@ export function createVoiceGatewayFromEnvironment(
   const config = readVoiceEnvironmentConfig(environment);
   const resolvedWakeWords = config.wakeWords?.length
     ? config.wakeWords
-    : [config.porcupineWakeWord ?? runtimeConfig.voice.porcupine.wakeWord];
-  const resolvedAccessKey =
-    config.porcupineAccessKey ?? runtimeConfig.voice.porcupine.accessKey;
+    : config.wakeWord !== undefined
+      ? [config.wakeWord]
+      : runtimeConfig.voice.porcupine.wakeWords;
+  const resolvedWakeWordUrl =
+    config.wakeWordUrl ?? runtimeConfig.voice.porcupine.url;
 
   return new VoiceGateway({
     gateway,
@@ -148,17 +147,14 @@ export function createVoiceGatewayFromEnvironment(
           url: config.ttsBaseUrl ?? runtimeConfig.voice.chatterbox.url,
         },
         porcupine: {
-          accessKey: resolvedAccessKey,
-          wakeWord: resolvedWakeWords[0] ?? runtimeConfig.voice.porcupine.wakeWord,
+          url: resolvedWakeWordUrl,
+          wakeWords: resolvedWakeWords,
         },
       },
     },
     wakeWordProvider: new PorcupineProvider({
-      accessKey: resolvedAccessKey,
+      baseUrl: resolvedWakeWordUrl,
       keywords: resolvedWakeWords,
-      sensitivity: config.wakeWordSensitivity,
-      audioDeviceIndex: config.audioDeviceIndex,
-      modelPath: config.porcupineModelPath,
     }),
     microphoneConfig: {
       sampleRateHertz: config.micSampleRateHertz,
@@ -185,16 +181,13 @@ export function readVoiceEnvironmentConfig(
     ollamaModel:
       environment.OLLAMA_MODEL ??
       environment.SONNY_OLLAMA_MODEL,
-    porcupineAccessKey:
-      environment.PORCUPINE_ACCESS_KEY ??
-      environment.SONNY_PORCUPINE_ACCESS_KEY,
-    porcupineWakeWord:
+    wakeWordUrl:
+      environment.WAKE_WORD_URL ??
+      environment.SONNY_WAKE_WORD_URL,
+    wakeWord:
       environment.PORCUPINE_WAKE_WORD ??
       environment.SONNY_PORCUPINE_WAKE_WORD,
     wakeWords: parseWakeWords(environment.SONNY_WAKE_WORDS),
-    porcupineModelPath: environment.SONNY_PORCUPINE_MODEL_PATH,
-    wakeWordSensitivity: parseOptionalNumber(environment.SONNY_WAKE_WORD_SENSITIVITY),
-    audioDeviceIndex: parseOptionalInteger(environment.SONNY_AUDIO_DEVICE_INDEX),
     sttBaseUrl:
       environment.FASTER_WHISPER_URL ??
       environment.SONNY_STT_BASE_URL,

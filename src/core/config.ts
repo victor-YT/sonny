@@ -20,8 +20,8 @@ export interface ChatterboxRuntimeConfig {
 }
 
 export interface PorcupineRuntimeConfig {
-  accessKey: string;
-  wakeWord: string;
+  url: string;
+  wakeWords: string[];
 }
 
 export interface VoiceRuntimeConfig {

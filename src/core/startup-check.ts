@@ -7,7 +7,7 @@ export interface StartupEnvironment {
   ollamaModel: string;
   ollamaBaseUrl: string;
   voiceMode: boolean;
-  porcupineAccessKey?: string;
+  wakeWordUrl?: string;
   fasterWhisperUrl?: string;
   chatterboxUrl?: string;
 }
@@ -43,15 +43,15 @@ export function loadStartupEnvironment(
   );
   const voiceMode = readRequiredBoolean(environment, 'SONNY_VOICE_MODE', issues);
 
-  let porcupineAccessKey: string | undefined;
+  let wakeWordUrl: string | undefined;
   let fasterWhisperUrl: string | undefined;
   let chatterboxUrl: string | undefined;
 
   if (voiceMode) {
-    porcupineAccessKey = readRequiredEnv(
+    wakeWordUrl = readRequiredUrl(
       environment,
-      ['PORCUPINE_ACCESS_KEY', 'SONNY_PORCUPINE_ACCESS_KEY'],
-      'PORCUPINE_ACCESS_KEY',
+      ['WAKE_WORD_URL', 'SONNY_WAKE_WORD_URL'],
+      'WAKE_WORD_URL',
       issues,
     );
     fasterWhisperUrl = readRequiredUrl(
@@ -76,7 +76,7 @@ export function loadStartupEnvironment(
     ollamaModel,
     ollamaBaseUrl,
     voiceMode,
-    porcupineAccessKey,
+    wakeWordUrl,
     fasterWhisperUrl,
     chatterboxUrl,
   };

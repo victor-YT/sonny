@@ -5,50 +5,40 @@ import type {
   WakeWordProvider,
 } from './wake-word.js';
 
-const PORCUPINE_MODULE = '@picovoice/porcupine-node';
-const PV_RECORDER_MODULE = '@picovoice/pvrecorder-node';
-
-interface PorcupineRuntime {
-  frameLength: number;
-  process(frame: Int16Array): number | Promise<number>;
-  release?(): void | Promise<void>;
-  delete?(): void | Promise<void>;
-}
-
-interface PvRecorderRuntime {
-  start(): void | Promise<void>;
-  stop(): void | Promise<void>;
-  read(): Promise<Int16Array | number[]>;
-  release?(): void | Promise<void>;
-  delete?(): void | Promise<void>;
+const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
+interface DetectionMessage {
+  type?: string;
+  keyword?: string;
+  timestamp?: number;
 }
 
 export interface PorcupineConfig extends WakeWordConfig {
-  accessKey: string;
-  modelPath?: string;
+  baseUrl: string;
+  requestTimeoutMs?: number;
 }
 
 export class PorcupineProvider implements WakeWordProvider {
-  public readonly name = 'porcupine';
+  public readonly name = 'openwakeword';
 
   private readonly config: PorcupineConfig;
   private readonly listeners = new Set<WakeWordListener>();
 
-  private porcupine: PorcupineRuntime | undefined;
-  private recorder: PvRecorderRuntime | undefined;
-  private listenTask: Promise<void> | undefined;
+  private websocket: WebSocket | undefined;
   private stopping = false;
 
   public constructor(config: PorcupineConfig) {
     if (config.keywords.length === 0) {
-      throw new Error('Porcupine requires at least one keyword');
+      throw new Error('openWakeWord requires at least one keyword');
     }
 
-    this.config = config;
+    this.config = {
+      ...config,
+      keywords: config.keywords.map((keyword) => keyword.trim().toLowerCase()),
+    };
   }
 
   public get isListening(): boolean {
-    return this.listenTask !== undefined && !this.stopping;
+    return this.websocket !== undefined && !this.stopping;
   }
 
   public onDetection(listener: WakeWordListener): void {
@@ -60,26 +50,22 @@ export class PorcupineProvider implements WakeWordProvider {
   }
 
   public async start(): Promise<void> {
-    if (this.listenTask !== undefined) {
+    if (this.websocket !== undefined) {
       return;
     }
 
     this.stopping = false;
 
     try {
-      this.porcupine = await this.createPorcupine();
-      this.recorder = await this.createRecorder(this.porcupine.frameLength);
-
-      await this.recorder.start();
+      await this.assertServiceReachable();
+      await this.connectWebSocket();
       this.emit({
         type: 'ready',
         timestamp: Date.now(),
       });
-
-      this.listenTask = this.listenLoop();
     } catch (error: unknown) {
       await this.cleanup();
-      const providerError = this.toError(error, 'Porcupine failed to start');
+      const providerError = this.toError(error, 'openWakeWord failed to start');
 
       this.emit({
         type: 'error',
@@ -92,304 +78,150 @@ export class PorcupineProvider implements WakeWordProvider {
   }
 
   public async stop(): Promise<void> {
-    const currentTask = this.listenTask;
-
-    if (currentTask === undefined) {
-      return;
-    }
-
     this.stopping = true;
 
-    if (this.recorder !== undefined) {
-      await this.callCleanupMethod(this.recorder, 'stop');
+    const websocket = this.websocket;
+
+    this.websocket = undefined;
+
+    if (websocket !== undefined) {
+      websocket.close();
     }
 
-    try {
-      await currentTask;
-    } finally {
-      await this.cleanup();
-    }
+    await this.cleanup();
   }
 
-  private async listenLoop(): Promise<void> {
-    try {
-      while (!this.stopping && this.porcupine !== undefined && this.recorder !== undefined) {
-        const frameData = await this.recorder.read();
+  private async connectWebSocket(): Promise<void> {
+    const websocketUrl = this.toWebSocketUrl();
 
-        if (this.stopping) {
-          break;
+    await new Promise<void>((resolve, reject) => {
+      const websocket = new WebSocket(websocketUrl);
+      let settled = false;
+
+      websocket.onopen = () => {
+        settled = true;
+        this.websocket = websocket;
+        resolve();
+      };
+
+      websocket.onmessage = (event) => {
+        void this.handleMessage(event.data);
+      };
+
+      websocket.onerror = () => {
+        if (!settled) {
+          reject(new Error(`Unable to connect to wake-word service at ${websocketUrl}`));
+          return;
         }
 
-        const keywordIndex = await this.porcupine.process(
-          this.toFrame(frameData, this.porcupine.frameLength),
-        );
-
-        if (keywordIndex >= 0) {
-          const keyword = this.config.keywords[keywordIndex] ?? this.config.keywords[0];
-
+        if (!this.stopping) {
           this.emit({
-            type: 'detected',
-            keyword,
+            type: 'error',
+            error: new Error('Wake-word service websocket reported an error'),
             timestamp: Date.now(),
           });
         }
+      };
+
+      websocket.onclose = () => {
+        this.websocket = undefined;
+
+        if (!settled) {
+          reject(new Error(`Wake-word service closed the connection at ${websocketUrl}`));
+          return;
+        }
+
+        if (!this.stopping) {
+          this.emit({
+            type: 'error',
+            error: new Error('Wake-word service websocket connection closed unexpectedly'),
+            timestamp: Date.now(),
+          });
+        }
+      };
+    });
+  }
+
+  private async handleMessage(payload: unknown): Promise<void> {
+    const message = this.parseMessage(payload);
+
+    if (message?.type !== 'detected' || message.keyword === undefined) {
+      return;
+    }
+
+    const keyword = message.keyword.trim().toLowerCase();
+
+    if (!this.config.keywords.includes(keyword)) {
+      return;
+    }
+
+    this.emit({
+      type: 'detected',
+      keyword,
+      timestamp: message.timestamp ?? Date.now(),
+    });
+  }
+
+  private parseMessage(payload: unknown): DetectionMessage | undefined {
+    if (typeof payload !== 'string') {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+
+      if (!this.isRecord(parsed)) {
+        return undefined;
       }
-    } catch (error: unknown) {
-      if (!this.stopping) {
-        const providerError = this.toError(error, 'Porcupine detection loop failed');
 
-        this.emit({
-          type: 'error',
-          error: providerError,
-          timestamp: Date.now(),
-        });
+      return parsed;
+    } catch {
+      return undefined;
+    }
+  }
 
-        throw providerError;
+  private async assertServiceReachable(): Promise<void> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+
+    try {
+      const response = await fetch(this.toStatusUrl(), {
+        method: 'POST',
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Wake-word service returned HTTP ${response.status}`);
       }
     } finally {
-      this.listenTask = undefined;
+      clearTimeout(timeoutId);
     }
   }
 
-  private async createPorcupine(): Promise<PorcupineRuntime> {
-    const module = await this.loadModule(PORCUPINE_MODULE);
-    const container = this.resolveExportContainer(module);
-    const sensitivities = this.buildSensitivities();
-    const keywords = [...this.config.keywords];
-
-    const createCandidates = [
-      this.readFunction(container, 'create'),
-      this.readNestedFunction(container, 'Porcupine', 'create'),
-    ];
-
-    for (const candidate of createCandidates) {
-      if (candidate !== undefined) {
-        const created = await candidate(
-          this.config.accessKey,
-          keywords,
-          sensitivities,
-          this.config.modelPath,
-        );
-
-        return this.assertPorcupineRuntime(created);
-      }
-    }
-
-    const PorcupineConstructor = this.readConstructor(container, 'Porcupine');
-
-    if (PorcupineConstructor !== undefined) {
-      const created = new PorcupineConstructor(
-        this.config.accessKey,
-        keywords,
-        sensitivities,
-        this.config.modelPath,
-      );
-
-      return this.assertPorcupineRuntime(created);
-    }
-
-    throw new Error(
-      'Unable to initialize Porcupine. Expected create() or Porcupine constructor export.',
-    );
+  private toStatusUrl(): string {
+    return new URL('/status', this.config.baseUrl).toString();
   }
 
-  private async createRecorder(frameLength: number): Promise<PvRecorderRuntime> {
-    const module = await this.loadModule(PV_RECORDER_MODULE);
-    const container = this.resolveExportContainer(module);
-    const deviceIndex = this.config.audioDeviceIndex;
-    const createCandidates = [
-      this.readFunction(container, 'create'),
-      this.readNestedFunction(container, 'PvRecorder', 'create'),
-    ];
+  private toWebSocketUrl(): string {
+    const url = new URL('/ws', this.config.baseUrl);
 
-    for (const candidate of createCandidates) {
-      if (candidate !== undefined) {
-        const created = await candidate(frameLength, deviceIndex);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
-        return this.assertRecorderRuntime(created);
-      }
-    }
-
-    const RecorderConstructor = this.readConstructor(container, 'PvRecorder');
-
-    if (RecorderConstructor !== undefined) {
-      const created = new RecorderConstructor(frameLength, deviceIndex);
-
-      return this.assertRecorderRuntime(created);
-    }
-
-    throw new Error(
-      'Unable to initialize PvRecorder. Expected create() or PvRecorder constructor export.',
-    );
+    return url.toString();
   }
 
-  private buildSensitivities(): number[] {
-    const sensitivity = this.config.sensitivity ?? 0.5;
-
-    return this.config.keywords.map(() => sensitivity);
-  }
-
-  private toFrame(data: Int16Array | number[], expectedLength: number): Int16Array {
-    const frame = data instanceof Int16Array ? data : Int16Array.from(data);
-
-    if (frame.length !== expectedLength) {
-      throw new Error(
-        `Porcupine recorder returned frame length ${frame.length}, expected ${expectedLength}`,
-      );
-    }
-
-    return frame;
+  private async cleanup(): Promise<void> {
+    this.websocket = undefined;
+    this.stopping = false;
   }
 
   private emit(event: WakeWordEvent): void {
     for (const listener of this.listeners) {
       listener(event);
     }
-  }
-
-  private async cleanup(): Promise<void> {
-    const recorder = this.recorder;
-    const porcupine = this.porcupine;
-
-    this.recorder = undefined;
-    this.porcupine = undefined;
-    this.listenTask = undefined;
-    this.stopping = false;
-
-    if (recorder !== undefined) {
-      await this.callCleanupMethod(recorder, 'release');
-      await this.callCleanupMethod(recorder, 'delete');
-    }
-
-    if (porcupine !== undefined) {
-      await this.callCleanupMethod(porcupine, 'release');
-      await this.callCleanupMethod(porcupine, 'delete');
-    }
-  }
-
-  private async callCleanupMethod(
-    value: unknown,
-    methodName: 'stop' | 'release' | 'delete',
-  ): Promise<void> {
-    if (!this.isRecord(value)) {
-      return;
-    }
-
-    const method = value[methodName];
-
-    if (typeof method === 'function') {
-      await method.call(value);
-    }
-  }
-
-  private async loadModule(specifier: string): Promise<unknown> {
-    const dynamicImport = new Function(
-      'moduleSpecifier',
-      'return import(moduleSpecifier);',
-    ) as (moduleSpecifier: string) => Promise<unknown>;
-
-    try {
-      return await dynamicImport(specifier);
-    } catch (error: unknown) {
-      throw this.toError(
-        error,
-        `Missing runtime dependency ${specifier}. Install the Picovoice SDK packages before using Porcupine.`,
-      );
-    }
-  }
-
-  private resolveExportContainer(module: unknown): Record<string, unknown> {
-    if (!this.isRecord(module)) {
-      throw new Error('Dynamic module export must be an object');
-    }
-
-    const defaultExport = module.default;
-
-    if (this.isRecord(defaultExport)) {
-      return defaultExport;
-    }
-
-    return module;
-  }
-
-  private readFunction(
-    container: Record<string, unknown>,
-    property: string,
-  ):
-    | ((...args: unknown[]) => unknown | Promise<unknown>)
-    | undefined {
-    const value = container[property];
-
-    return typeof value === 'function'
-      ? (value as (...args: unknown[]) => unknown | Promise<unknown>)
-      : undefined;
-  }
-
-  private readNestedFunction(
-    container: Record<string, unknown>,
-    parentProperty: string,
-    property: string,
-  ):
-    | ((...args: unknown[]) => unknown | Promise<unknown>)
-    | undefined {
-    const parentValue = container[parentProperty];
-
-    if (!this.isRecord(parentValue)) {
-      return undefined;
-    }
-
-    const value = parentValue[property];
-
-    return typeof value === 'function'
-      ? (value as (...args: unknown[]) => unknown | Promise<unknown>)
-      : undefined;
-  }
-
-  private readConstructor(
-    container: Record<string, unknown>,
-    property: string,
-  ): (new (...args: unknown[]) => unknown) | undefined {
-    const value = container[property];
-
-    return typeof value === 'function'
-      ? (value as new (...args: unknown[]) => unknown)
-      : undefined;
-  }
-
-  private assertPorcupineRuntime(value: unknown): PorcupineRuntime {
-    if (!this.isRecord(value)) {
-      throw new Error('Porcupine instance must be an object');
-    }
-
-    if (typeof value.frameLength !== 'number') {
-      throw new Error('Porcupine instance is missing frameLength');
-    }
-
-    if (typeof value.process !== 'function') {
-      throw new Error('Porcupine instance is missing process(frame)');
-    }
-
-    return value as unknown as PorcupineRuntime;
-  }
-
-  private assertRecorderRuntime(value: unknown): PvRecorderRuntime {
-    if (!this.isRecord(value)) {
-      throw new Error('PvRecorder instance must be an object');
-    }
-
-    if (typeof value.start !== 'function') {
-      throw new Error('PvRecorder instance is missing start()');
-    }
-
-    if (typeof value.stop !== 'function') {
-      throw new Error('PvRecorder instance is missing stop()');
-    }
-
-    if (typeof value.read !== 'function') {
-      throw new Error('PvRecorder instance is missing read()');
-    }
-
-    return value as unknown as PvRecorderRuntime;
   }
 
   private toError(error: unknown, fallbackMessage: string): Error {
@@ -400,7 +232,7 @@ export class PorcupineProvider implements WakeWordProvider {
     return new Error(fallbackMessage);
   }
 
-  private isRecord(value: unknown): value is Record<string, unknown> {
+  private isRecord(value: unknown): value is DetectionMessage {
     return typeof value === 'object' && value !== null;
   }
 }
