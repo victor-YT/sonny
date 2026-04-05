@@ -61,28 +61,59 @@ class Qwen3TTSService:
         self._model = None
 
     def synthesize(self, request: SynthesizeRequest) -> GeneratedAudio:
-        model = self._ensure_model()
-        instruct = self._build_instruction(
-            emotion=request.emotion,
-            exaggeration=request.exaggeration,
-        )
-
-        wavs, sample_rate = model.generate_custom_voice(
-            text=request.text,
-            language=request.language or DEFAULT_LANGUAGE,
-            speaker=request.speaker or DEFAULT_SPEAKER,
-            instruct=instruct,
-        )
-
-        if len(wavs) == 0:
-            raise RuntimeError("Qwen3-TTS did not return any audio")
-
-        wav_bytes = encode_wav_bytes(np.asarray(wavs[0], dtype=np.float32), sample_rate)
+        audio, sample_rate = self._collect_audio(request)
+        wav_bytes = encode_wav_bytes(audio, sample_rate)
 
         return GeneratedAudio(
             wav_bytes=wav_bytes,
             sample_rate=sample_rate,
         )
+
+    def synthesize_stream(self, request: SynthesizeRequest) -> Iterator[bytes]:
+        audio, sample_rate = self._collect_audio(request)
+        wav_bytes = encode_wav_bytes(audio, sample_rate)
+        return iter_audio_chunks(wav_bytes)
+
+    def _collect_audio(self, request: SynthesizeRequest) -> tuple[np.ndarray, int]:
+        model = self._ensure_model()
+        chunks: list[np.ndarray] = []
+        sample_rate: int | None = None
+
+        for result in self._generate(model, request):
+            chunk = np.asarray(result.audio, dtype=np.float32)
+
+            if chunk.size == 0:
+                continue
+
+            chunks.append(chunk)
+            sample_rate = int(result.sample_rate)
+
+        if not chunks or sample_rate is None:
+            raise RuntimeError("Qwen3-TTS did not return any audio")
+
+        return np.concatenate(chunks), sample_rate
+
+    def _generate(self, model, request: SynthesizeRequest):
+        instruct = self._build_instruction(
+            emotion=request.emotion,
+            exaggeration=request.exaggeration,
+        )
+
+        generation_kwargs = {
+            "text": request.text,
+            "language": request.language or DEFAULT_LANGUAGE,
+            "speaker": request.speaker or DEFAULT_SPEAKER,
+            "instruct": instruct,
+        }
+
+        try:
+            return model.generate(**generation_kwargs)
+        except TypeError:
+            LOGGER.warning(
+                "Qwen3-TTS model.generate does not accept custom voice kwargs; "
+                "falling back to text-only generation",
+            )
+            return model.generate(text=request.text)
 
     def _ensure_model(self):
         if self._model is not None:
@@ -174,16 +205,17 @@ async def health() -> dict[str, str]:
 @app.post("/synthesize")
 async def synthesize(request: SynthesizeRequest) -> Response:
     try:
+        if request.stream:
+            stream = await asyncio.to_thread(service.synthesize_stream, request)
+            return StreamingResponse(
+                stream,
+                media_type="audio/wav",
+            )
+
         generated = await asyncio.to_thread(service.synthesize, request)
     except Exception as error:  # pragma: no cover - service boundary logging
         LOGGER.exception("Synthesis failed")
         raise HTTPException(status_code=500, detail=str(error)) from error
-
-    if request.stream:
-        return StreamingResponse(
-            iter_audio_chunks(generated.wav_bytes),
-            media_type="audio/wav",
-        )
 
     return Response(
         content=generated.wav_bytes,
@@ -194,13 +226,13 @@ async def synthesize(request: SynthesizeRequest) -> Response:
 @app.post("/synthesize/stream")
 async def synthesize_stream(request: SynthesizeRequest) -> StreamingResponse:
     try:
-        generated = await asyncio.to_thread(service.synthesize, request)
+        stream = await asyncio.to_thread(service.synthesize_stream, request)
     except Exception as error:  # pragma: no cover - service boundary logging
         LOGGER.exception("Streaming synthesis failed")
         raise HTTPException(status_code=500, detail=str(error)) from error
 
     return StreamingResponse(
-        iter_audio_chunks(generated.wav_bytes),
+        stream,
         media_type="audio/wav",
     )
 
