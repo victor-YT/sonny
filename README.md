@@ -290,7 +290,7 @@ These are intended to capture durable information about the user, not every tran
 
 ### 2. Recent memory
 
-Recent interactions are stored in `data/memory/recent-memory.sqlite`.
+Recent interactions are stored in `data/memory/recent.json`.
 
 This gives Sonny short-horizon recall for the last several days without polluting long-term memory with temporary details.
 

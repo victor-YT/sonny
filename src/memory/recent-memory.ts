@@ -1,6 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import BetterSqlite3 from 'better-sqlite3';
 
 import type { LlmMessage } from '../core/providers/llm.js';
 
@@ -9,7 +8,7 @@ const DEFAULT_DATABASE_PATH = join(
   process.cwd(),
   'data',
   'memory',
-  'recent-memory.sqlite',
+  'recent.json',
 );
 const DEFAULT_QUERY_LIMIT = 50;
 
@@ -19,6 +18,11 @@ interface RecentMemoryRow {
   role: LlmMessage['role'];
   content: string;
   createdAt: string;
+}
+
+interface RecentMemoryState {
+  nextId: number;
+  messages: RecentMemoryRow[];
 }
 
 export interface RecentMemoryRecord {
@@ -49,20 +53,21 @@ export interface RecentMemoryMessage {
 }
 
 export class RecentMemory {
-  private readonly database: BetterSqlite3.Database;
+  private readonly databasePath: string;
   private readonly retentionDays: number;
   private readonly clock: () => Date;
+  private state: RecentMemoryState;
 
   public constructor(config: RecentMemoryConfig = {}) {
-    const databasePath = config.databasePath ?? DEFAULT_DATABASE_PATH;
+    this.databasePath = config.databasePath ?? DEFAULT_DATABASE_PATH;
 
-    mkdirSync(dirname(databasePath), { recursive: true });
+    mkdirSync(dirname(this.databasePath), { recursive: true });
 
-    this.database = new BetterSqlite3(databasePath);
     this.retentionDays = config.retentionDays ?? DEFAULT_RETENTION_DAYS;
     this.clock = config.clock ?? (() => new Date());
+    this.state = this.loadState();
 
-    this.initialize();
+    this.pruneExpired();
   }
 
   public addMessage(record: RecentMemoryRecord): void {
@@ -72,20 +77,21 @@ export class RecentMemory {
       return;
     }
 
-    this.pruneExpired(record.createdAt ?? this.clock());
-    this.database
-      .prepare(
-        `
-          INSERT INTO recent_memory (session_id, role, content, created_at)
-          VALUES (?, ?, ?, ?)
-        `,
-      )
-      .run(
-        record.sessionId,
-        record.role,
-        content,
-        this.toIsoString(record.createdAt ?? this.clock()),
-      );
+    const createdAt = record.createdAt ?? this.clock();
+
+    this.pruneExpired(createdAt);
+
+    const row: RecentMemoryRow = {
+      id: this.state.nextId,
+      sessionId: record.sessionId,
+      role: record.role,
+      content,
+      createdAt: this.toIsoString(createdAt),
+    };
+
+    this.state.nextId += 1;
+    this.state.messages.push(row);
+    this.persist();
   }
 
   public listMessages(query: RecentMemoryQuery = {}): RecentMemoryMessage[] {
@@ -94,81 +100,103 @@ export class RecentMemory {
 
     this.pruneExpired(now);
 
-    if (query.sessionId !== undefined) {
-      const rows = this.database
-        .prepare(
-          `
-            SELECT
-              id,
-              session_id AS sessionId,
-              role,
-              content,
-              created_at AS createdAt
-            FROM recent_memory
-            WHERE created_at >= ? AND session_id = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-          `,
-        )
-        .all(
-          this.getCutoffIsoString(now),
-          query.sessionId,
-          limit,
-        );
+    const filteredMessages = this.state.messages.filter((message) => {
+      if (message.createdAt < this.getCutoffIsoString(now)) {
+        return false;
+      }
 
-      return this.toRows(rows).map((row) => this.toMessage(row));
-    }
+      if (query.sessionId !== undefined && message.sessionId !== query.sessionId) {
+        return false;
+      }
 
-    const rows = this.database
-      .prepare(
-        `
-          SELECT
-            id,
-            session_id AS sessionId,
-            role,
-            content,
-            created_at AS createdAt
-          FROM recent_memory
-          WHERE created_at >= ?
-          ORDER BY created_at DESC
-          LIMIT ?
-        `,
-      )
-      .all(this.getCutoffIsoString(now), limit);
+      return true;
+    });
 
-    return this.toRows(rows).map((row) => this.toMessage(row));
+    return filteredMessages
+      .slice()
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, limit)
+      .map((row) => this.toMessage(row));
   }
 
   public pruneExpired(now: Date = this.clock()): number {
-    const result = this.database
-      .prepare('DELETE FROM recent_memory WHERE created_at < ?')
-      .run(this.getCutoffIsoString(now));
+    const cutoff = this.getCutoffIsoString(now);
+    const previousCount = this.state.messages.length;
 
-    return Number(result.changes);
+    this.state.messages = this.state.messages.filter((message) => message.createdAt >= cutoff);
+
+    const deletedCount = previousCount - this.state.messages.length;
+
+    if (deletedCount > 0) {
+      this.persist();
+    }
+
+    return deletedCount;
   }
 
   public close(): void {
-    this.database.close();
+    return;
   }
 
-  private initialize(): void {
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS recent_memory (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL
+  private loadState(): RecentMemoryState {
+    try {
+      const rawValue = readFileSync(this.databasePath, 'utf8');
+      const parsed = JSON.parse(rawValue) as unknown;
+
+      return this.parseState(parsed);
+    } catch (error: unknown) {
+      if (this.isFileMissing(error)) {
+        const emptyState = this.createEmptyState();
+
+        this.writeState(emptyState);
+        return emptyState;
+      }
+
+      throw new Error(
+        `Failed to load recent memory from ${this.databasePath}: ${this.toErrorMessage(error)}`,
       );
+    }
+  }
 
-      CREATE INDEX IF NOT EXISTS recent_memory_created_at_idx
-      ON recent_memory (created_at DESC);
+  private parseState(value: unknown): RecentMemoryState {
+    if (!this.isRecord(value)) {
+      throw new Error('Recent memory file must contain an object');
+    }
 
-      CREATE INDEX IF NOT EXISTS recent_memory_session_id_idx
-      ON recent_memory (session_id, created_at DESC);
-    `);
+    const nextId = value.nextId;
+    const messages = value.messages;
 
-    this.pruneExpired();
+    if (typeof nextId !== 'number' || !Number.isInteger(nextId) || nextId < 1) {
+      throw new Error('Recent memory file nextId must be a positive integer');
+    }
+
+    if (!Array.isArray(messages)) {
+      throw new Error('Recent memory file messages must be an array');
+    }
+
+    return {
+      nextId,
+      messages: messages.map((row) => this.toRow(row)),
+    };
+  }
+
+  private createEmptyState(): RecentMemoryState {
+    return {
+      nextId: 1,
+      messages: [],
+    };
+  }
+
+  private persist(): void {
+    this.writeState(this.state);
+  }
+
+  private writeState(state: RecentMemoryState): void {
+    writeFileSync(
+      this.databasePath,
+      `${JSON.stringify(state, null, 2)}\n`,
+      'utf8',
+    );
   }
 
   private getCutoffIsoString(now: Date): string {
@@ -191,14 +219,6 @@ export class RecentMemory {
       content: row.content,
       createdAt: new Date(row.createdAt),
     };
-  }
-
-  private toRows(rows: unknown): RecentMemoryRow[] {
-    if (!Array.isArray(rows)) {
-      throw new Error('Recent memory query returned an invalid payload');
-    }
-
-    return rows.map((row) => this.toRow(row));
   }
 
   private toRow(value: unknown): RecentMemoryRow {
@@ -248,6 +268,22 @@ export class RecentMemory {
       value === 'assistant' ||
       value === 'tool'
     );
+  }
+
+  private isFileMissing(error: unknown): boolean {
+    return (
+      this.isRecord(error) &&
+      typeof error.code === 'string' &&
+      error.code === 'ENOENT'
+    );
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Unknown error';
   }
 }
 

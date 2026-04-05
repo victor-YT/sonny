@@ -1,6 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import BetterSqlite3 from 'better-sqlite3';
 
 import type { LlmMessage } from './providers/llm.js';
 
@@ -8,7 +7,7 @@ const DEFAULT_DATABASE_PATH = join(
   process.cwd(),
   'data',
   'memory',
-  'conversation-history.sqlite',
+  'conversations.json',
 );
 const DEFAULT_MAX_IN_MEMORY_MESSAGES = 500;
 
@@ -21,6 +20,11 @@ interface ConversationHistoryRow {
   tokenCount: number;
   toolCallId: string | null;
   toolCallsJson: string | null;
+}
+
+interface ConversationHistoryState {
+  nextId: number;
+  entries: ConversationHistoryRow[];
 }
 
 export interface ConversationHistoryEntry extends LlmMessage {
@@ -47,24 +51,23 @@ export interface PersistedConversationMessage {
 }
 
 export class ConversationHistory {
-  private readonly database: BetterSqlite3.Database;
+  private readonly databasePath: string;
   private readonly maxInMemoryMessages: number;
   private readonly tokenEstimator: (message: LlmMessage) => number;
   private readonly clock: () => Date;
   private readonly entriesBySession = new Map<string, ConversationHistoryEntry[]>();
+  private state: ConversationHistoryState;
 
   public constructor(config: ConversationHistoryConfig = {}) {
-    const databasePath = config.databasePath ?? DEFAULT_DATABASE_PATH;
+    this.databasePath = config.databasePath ?? DEFAULT_DATABASE_PATH;
 
-    mkdirSync(dirname(databasePath), { recursive: true });
+    mkdirSync(dirname(this.databasePath), { recursive: true });
 
-    this.database = new BetterSqlite3(databasePath);
     this.maxInMemoryMessages =
       config.maxInMemoryMessages ?? DEFAULT_MAX_IN_MEMORY_MESSAGES;
     this.tokenEstimator = config.tokenEstimator ?? estimateMessageTokens;
     this.clock = config.clock ?? (() => new Date());
-
-    this.initialize();
+    this.state = this.loadState();
   }
 
   public addMessage(
@@ -74,49 +77,31 @@ export class ConversationHistory {
   ): ConversationHistoryEntry {
     const normalizedMessage = this.normalizeMessage(message);
     const tokenCount = this.tokenEstimator(normalizedMessage);
-    const result = this.database
-      .prepare(
-        `
-          INSERT INTO conversation_history (
-            session_id,
-            role,
-            content,
-            timestamp,
-            token_count,
-            tool_call_id,
-            tool_calls_json
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        sessionId,
-        normalizedMessage.role,
-        normalizedMessage.content,
-        timestamp.toISOString(),
-        tokenCount,
-        normalizedMessage.toolCallId ?? null,
-        normalizedMessage.toolCalls === undefined
-          ? null
-          : JSON.stringify(normalizedMessage.toolCalls),
-      );
-    const entry: ConversationHistoryEntry = {
-      id: Number(result.lastInsertRowid),
+    const row: ConversationHistoryRow = {
+      id: this.state.nextId,
       sessionId,
       role: normalizedMessage.role,
       content: normalizedMessage.content,
-      timestamp,
+      timestamp: timestamp.toISOString(),
       tokenCount,
-      toolCallId: normalizedMessage.toolCallId,
-      toolCalls: normalizedMessage.toolCalls,
+      toolCallId: normalizedMessage.toolCallId ?? null,
+      toolCallsJson:
+        normalizedMessage.toolCalls === undefined
+          ? null
+          : JSON.stringify(normalizedMessage.toolCalls),
     };
+    const entry: ConversationHistoryEntry = this.toEntry(row);
     const sessionEntries = this.getOrLoadSessionEntries(sessionId);
 
+    this.state.nextId += 1;
+    this.state.entries.push(row);
     sessionEntries.push(entry);
 
     if (sessionEntries.length > this.maxInMemoryMessages) {
       sessionEntries.splice(0, sessionEntries.length - this.maxInMemoryMessages);
     }
+
+    this.persist();
 
     return entry;
   }
@@ -157,33 +142,18 @@ export class ConversationHistory {
   }
 
   public listRecentMessages(limit = 50): PersistedConversationMessage[] {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT
-            id,
-            session_id AS sessionId,
-            role,
-            content,
-            timestamp,
-            token_count AS tokenCount,
-            tool_call_id AS toolCallId,
-            tool_calls_json AS toolCallsJson
-          FROM conversation_history
-          ORDER BY timestamp DESC
-          LIMIT ?
-        `,
-      )
-      .all(limit);
-
-    return this.toRows(rows).map((row) => ({
-      id: row.id,
-      sessionId: row.sessionId,
-      role: row.role,
-      content: row.content,
-      timestamp: new Date(row.timestamp),
-      tokenCount: row.tokenCount,
-    }));
+    return this.state.entries
+      .slice()
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+      .slice(0, limit)
+      .map((row) => ({
+        id: row.id,
+        sessionId: row.sessionId,
+        role: row.role,
+        content: row.content,
+        timestamp: new Date(row.timestamp),
+        tokenCount: row.tokenCount,
+      }));
   }
 
   public clearSession(sessionId: string): void {
@@ -191,28 +161,68 @@ export class ConversationHistory {
   }
 
   public close(): void {
-    this.database.close();
+    return;
   }
 
-  private initialize(): void {
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS conversation_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        token_count INTEGER NOT NULL,
-        tool_call_id TEXT,
-        tool_calls_json TEXT
+  private loadState(): ConversationHistoryState {
+    try {
+      const rawValue = readFileSync(this.databasePath, 'utf8');
+      const parsed = JSON.parse(rawValue) as unknown;
+
+      return this.parseState(parsed);
+    } catch (error: unknown) {
+      if (this.isFileMissing(error)) {
+        const emptyState = this.createEmptyState();
+
+        this.writeState(emptyState);
+        return emptyState;
+      }
+
+      throw new Error(
+        `Failed to load conversation history from ${this.databasePath}: ${this.toErrorMessage(error)}`,
       );
+    }
+  }
 
-      CREATE INDEX IF NOT EXISTS conversation_history_session_timestamp_idx
-      ON conversation_history (session_id, timestamp DESC);
+  private parseState(value: unknown): ConversationHistoryState {
+    if (!this.isRecord(value)) {
+      throw new Error('Conversation history file must contain an object');
+    }
 
-      CREATE INDEX IF NOT EXISTS conversation_history_timestamp_idx
-      ON conversation_history (timestamp DESC);
-    `);
+    const nextId = value.nextId;
+    const entries = value.entries;
+
+    if (typeof nextId !== 'number' || !Number.isInteger(nextId) || nextId < 1) {
+      throw new Error('Conversation history file nextId must be a positive integer');
+    }
+
+    if (!Array.isArray(entries)) {
+      throw new Error('Conversation history file entries must be an array');
+    }
+
+    return {
+      nextId,
+      entries: entries.map((entry) => this.toRow(entry)),
+    };
+  }
+
+  private createEmptyState(): ConversationHistoryState {
+    return {
+      nextId: 1,
+      entries: [],
+    };
+  }
+
+  private persist(): void {
+    this.writeState(this.state);
+  }
+
+  private writeState(state: ConversationHistoryState): void {
+    writeFileSync(
+      this.databasePath,
+      `${JSON.stringify(state, null, 2)}\n`,
+      'utf8',
+    );
   }
 
   private getOrLoadSessionEntries(sessionId: string): ConversationHistoryEntry[] {
@@ -222,25 +232,10 @@ export class ConversationHistory {
       return cached;
     }
 
-    const rows = this.database
-      .prepare(
-        `
-          SELECT
-            id,
-            session_id AS sessionId,
-            role,
-            content,
-            timestamp,
-            token_count AS tokenCount,
-            tool_call_id AS toolCallId,
-            tool_calls_json AS toolCallsJson
-          FROM conversation_history
-          WHERE session_id = ?
-          ORDER BY id ASC
-        `,
-      )
-      .all(sessionId);
-    const entries = this.toRows(rows).map((row) => this.toEntry(row));
+    const entries = this.state.entries
+      .filter((row) => row.sessionId === sessionId)
+      .sort((left, right) => left.id - right.id)
+      .map((row) => this.toEntry(row));
 
     this.entriesBySession.set(sessionId, entries);
 
@@ -286,14 +281,6 @@ export class ConversationHistory {
     const parsed: unknown = JSON.parse(value);
 
     return Array.isArray(parsed) ? parsed as LlmMessage['toolCalls'] : undefined;
-  }
-
-  private toRows(rows: unknown): ConversationHistoryRow[] {
-    if (!Array.isArray(rows)) {
-      throw new Error('Conversation history query returned an invalid payload');
-    }
-
-    return rows.map((row) => this.toRow(row));
   }
 
   private toRow(value: unknown): ConversationHistoryRow {
@@ -362,6 +349,22 @@ export class ConversationHistory {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+  }
+
+  private isFileMissing(error: unknown): boolean {
+    return (
+      this.isRecord(error) &&
+      typeof error.code === 'string' &&
+      error.code === 'ENOENT'
+    );
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Unknown error';
   }
 }
 
