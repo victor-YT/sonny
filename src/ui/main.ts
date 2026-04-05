@@ -4,8 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { Gateway } from '../core/gateway.js';
-import { OllamaProvider } from '../core/providers/ollama.js';
+import type { Gateway } from '../core/gateway.js';
 import type { LlmMessage } from '../core/providers/llm.js';
 import type { VoiceManager, VoiceManagerEvent, VoiceManagerState } from '../voice/voice-manager.js';
 import { CapsuleWindow } from './capsule.js';
@@ -77,12 +76,13 @@ export interface UiMainAppConfig {
 export class UiMainApp {
   private readonly preloadPath: string;
   private readonly panelUrl: string;
-  private readonly gateway: Gateway;
   private readonly trayController: TrayController;
   private readonly capsuleWindow: CapsuleWindow;
   private readonly conversation: UiConversationEntry[] = [];
   private menubarApp: Menubar | undefined;
   private status: UiMainStatusSnapshot;
+  private gateway: Gateway | undefined;
+  private gatewayPromise: Promise<Gateway> | undefined;
   private boundVoiceManager: VoiceManager | undefined;
   private voiceManagerListener:
     | ((event: VoiceManagerEvent) => void)
@@ -92,14 +92,7 @@ export class UiMainApp {
   public constructor(config: UiMainAppConfig = {}) {
     this.preloadPath = join(__dirname, 'preload.js');
     this.panelUrl = this.resolvePanelUrl();
-    this.gateway =
-      config.gateway ??
-      new Gateway({
-        llmProvider: new OllamaProvider(),
-        sessionConfig: {
-          systemPrompt: DEFAULT_SYSTEM_PROMPT,
-        },
-      });
+    this.gateway = config.gateway;
     this.trayController = new TrayController({
       tooltip: TOOLTIP,
     });
@@ -111,21 +104,26 @@ export class UiMainApp {
   }
 
   public async start(): Promise<Menubar> {
-    console.log('[ui.main] waiting for app ready');
-    await app.whenReady();
-    console.log('[ui.main] app ready event fired');
+    try {
+      console.log('[ui.main] waiting for app ready');
+      await app.whenReady();
+      console.log('[ui.main] app ready event fired');
 
-    if (this.menubarApp !== undefined) {
-      console.log('[ui.main] menubar already created');
+      if (this.menubarApp !== undefined) {
+        console.log('[ui.main] menubar already created');
+        return this.menubarApp;
+      }
+
+      this.registerIpc();
+      this.menubarApp = this.createMenubar();
+      console.log('[ui.main] menubar instance created');
+      void this.initializeGateway();
+
       return this.menubarApp;
+    } catch (error: unknown) {
+      console.error('[ui.main] startup failed', error);
+      throw error;
     }
-
-    this.registerIpc();
-    this.seedConversationFromSession();
-    this.menubarApp = this.createMenubar();
-    console.log('[ui.main] menubar instance created');
-
-    return this.menubarApp;
   }
 
   public async stop(): Promise<void> {
@@ -142,7 +140,7 @@ export class UiMainApp {
     ipcMain.removeHandler('gateway:list-conversation');
     ipcMain.removeHandler('gateway:send-message');
     this.capsuleWindow.destroy();
-    this.gateway.close();
+    this.gateway?.close();
 
     app.quit();
   }
@@ -307,7 +305,8 @@ export class UiMainApp {
       await this.applyStatus('thinking');
 
       try {
-        const response = await this.gateway.chat(trimmedMessage);
+        const gateway = await this.ensureGateway();
+        const response = await gateway.chat(trimmedMessage);
 
         this.appendConversation('assistant', response);
 
@@ -412,12 +411,63 @@ export class UiMainApp {
       return;
     }
 
-    for (const message of this.gateway.currentSession.getHistory()) {
+    const gateway = this.gateway;
+
+    if (gateway === undefined) {
+      return;
+    }
+
+    for (const message of gateway.currentSession.getHistory()) {
       const entry = this.toConversationEntry(message);
 
       if (entry !== null) {
         this.conversation.push(entry);
       }
+    }
+  }
+
+  private async initializeGateway(): Promise<void> {
+    try {
+      await this.ensureGateway();
+      this.seedConversationFromSession();
+    } catch (error: unknown) {
+      console.error('[ui.main] gateway initialization failed', error);
+    }
+  }
+
+  private async ensureGateway(): Promise<Gateway> {
+    if (this.gateway !== undefined) {
+      return this.gateway;
+    }
+
+    if (this.gatewayPromise === undefined) {
+      this.gatewayPromise = this.createDefaultGateway();
+    }
+
+    try {
+      this.gateway = await this.gatewayPromise;
+      return this.gateway;
+    } finally {
+      this.gatewayPromise = undefined;
+    }
+  }
+
+  private async createDefaultGateway(): Promise<Gateway> {
+    try {
+      const [{ Gateway }, { OllamaProvider }] = await Promise.all([
+        import('../core/gateway.js'),
+        import('../core/providers/ollama.js'),
+      ]);
+
+      return new Gateway({
+        llmProvider: new OllamaProvider(),
+        sessionConfig: {
+          systemPrompt: DEFAULT_SYSTEM_PROMPT,
+        },
+      });
+    } catch (error: unknown) {
+      console.error('[ui.main] failed to create default gateway', error);
+      throw error;
     }
   }
 }
@@ -432,8 +482,12 @@ export async function startUiMainApp(
 }
 
 if (process.argv[1] === __filename) {
-  void startUiMainApp().catch((error: unknown) => {
-    console.error('[ui.main] failed to start ui main app', error);
-    process.exitCode = 1;
-  });
+  void (async () => {
+    try {
+      await startUiMainApp();
+    } catch (error: unknown) {
+      console.error('[ui.main] failed to start ui main app', error);
+      process.exitCode = 1;
+    }
+  })();
 }
