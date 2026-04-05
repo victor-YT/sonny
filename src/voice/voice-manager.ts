@@ -21,7 +21,7 @@ import {
   StreamingAudioQueue,
   type StreamingAudioQueueEvent,
 } from './streaming-audio-queue.js';
-import { getThinkingSound } from './thinking-sounds.js';
+// import { getThinkingSound } from './thinking-sounds.js';
 
 export type VoiceManagerState =
   | 'idle'
@@ -649,12 +649,12 @@ export class VoiceManager {
   ): Promise<{ response: string; audio: Buffer }> {
     this.setState('thinking');
     const retryState = this.createTtsRetryState();
-    const thinkingSoundTask = this.playThinkingSound(
-      userMessage,
-      ttsOptions,
-      signal,
-      retryState,
-    );
+    // const thinkingSoundTask = this.playThinkingSound(
+    //   userMessage,
+    //   ttsOptions,
+    //   signal,
+    //   retryState,
+    // );
     const sentenceAudioTasks: Array<Promise<Buffer>> = [];
     const responseChunks: string[] = [];
     let bufferedText = '';
@@ -696,7 +696,7 @@ export class VoiceManager {
     }
 
     const response = responseChunks.join('');
-    await thinkingSoundTask;
+    // await thinkingSoundTask;
     this.throwIfInterrupted(signal);
 
     return {
