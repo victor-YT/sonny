@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { setTimeout as delay } from 'node:timers/promises';
 
 import type { VoiceCaptureResult } from './voice-manager.js';
 
@@ -36,12 +35,24 @@ export class Microphone {
 
   public async capture(): Promise<VoiceCaptureResult> {
     const maxSeconds = Math.ceil(this.maxCaptureMs / 1000);
-    const audioPromise = this.recordWithSox(maxSeconds);
+    const audioStream = new BufferAsyncIterable();
+    const audioPromise = this.recordWithSox(maxSeconds, audioStream);
 
-    return { audioPromise };
+    return {
+      audioStream,
+      audioPromise,
+      sttOptions: {
+        sampleRateHertz: this.sampleRateHertz,
+        channels: this.channels,
+        encoding: 'pcm_s16le',
+      },
+    };
   }
 
-  private recordWithSox(maxSeconds: number): Promise<Buffer> {
+  private recordWithSox(
+    maxSeconds: number,
+    audioStream: BufferAsyncIterable,
+  ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
 
@@ -52,7 +63,7 @@ export class Microphone {
           '-c', String(this.channels),
           '-b', '16',                 // 16-bit samples
           '-e', 'signed-integer',
-          '-t', 'wav',                // WAV output format
+          '-t', 'raw',                // raw PCM for streaming STT
           '-',                        // write to stdout
           'trim', '0', String(maxSeconds),
           'silence', '1', '0.1', '1%',
@@ -80,6 +91,7 @@ export class Microphone {
         settled = true;
 
         if (result instanceof Error) {
+          audioStream.fail(result);
           reject(result);
         } else {
           resolve(result);
@@ -99,6 +111,7 @@ export class Microphone {
       if (child.stdout !== null) {
         child.stdout.on('data', (chunk: Buffer) => {
           chunks.push(chunk);
+          audioStream.push(chunk);
         });
 
         child.stdout.on('error', (err: Error) => {
@@ -129,7 +142,8 @@ export class Microphone {
           return;
         }
 
-        const wav = Buffer.concat(chunks);
+        audioStream.end();
+        const wav = this.wrapPcmAsWav(Buffer.concat(chunks));
 
         if (code !== null && code !== 0) {
           console.warn(`[mic] sox exited with code ${code}, returning captured audio.`);
@@ -138,5 +152,93 @@ export class Microphone {
         finish(wav);
       });
     });
+  }
+
+  private wrapPcmAsWav(pcm: Buffer): Buffer {
+    const bytesPerSample = 2;
+    const byteRate = this.sampleRateHertz * this.channels * bytesPerSample;
+    const blockAlign = this.channels * bytesPerSample;
+    const header = Buffer.alloc(44);
+
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVE', 8, 'ascii');
+    header.write('fmt ', 12, 'ascii');
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(this.channels, 22);
+    header.writeUInt32LE(this.sampleRateHertz, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(pcm.length, 40);
+
+    return Buffer.concat([header, pcm]);
+  }
+}
+
+class BufferAsyncIterable implements AsyncIterable<Buffer> {
+  private readonly chunks: Buffer[] = [];
+  private readonly waiters: Array<() => void> = [];
+  private completed = false;
+  private failed: Error | undefined;
+
+  public push(chunk: Buffer): void {
+    if (this.completed || this.failed !== undefined || chunk.length === 0) {
+      return;
+    }
+
+    this.chunks.push(chunk);
+    this.flushWaiters();
+  }
+
+  public end(): void {
+    if (this.completed || this.failed !== undefined) {
+      return;
+    }
+
+    this.completed = true;
+    this.flushWaiters();
+  }
+
+  public fail(error: Error): void {
+    if (this.completed || this.failed !== undefined) {
+      return;
+    }
+
+    this.failed = error;
+    this.flushWaiters();
+  }
+
+  public async *[Symbol.asyncIterator](): AsyncIterator<Buffer> {
+    while (true) {
+      if (this.failed !== undefined) {
+        throw this.failed;
+      }
+
+      const chunk = this.chunks.shift();
+
+      if (chunk !== undefined) {
+        yield chunk;
+        continue;
+      }
+
+      if (this.completed) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        this.waiters.push(resolve);
+      });
+    }
+  }
+
+  private flushWaiters(): void {
+    while (this.waiters.length > 0) {
+      const waiter = this.waiters.shift();
+
+      waiter?.();
+    }
   }
 }

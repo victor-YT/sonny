@@ -225,9 +225,8 @@ async function runVoice(
       }
 
       try {
-        const response = await gateway.chat(trimmedInput);
+        const response = await voiceGateway.manager.respondToText(trimmedInput);
         stdout.write(`${response}\n`);
-        await voiceGateway.manager.speak(response);
       } catch (error: unknown) {
         console.error(`Message failed: ${toErrorMessage(error)}`);
       }

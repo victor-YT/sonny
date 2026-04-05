@@ -207,7 +207,7 @@ test('ChatterboxProvider sends JSON payloads that match the bundled TTS service'
     });
 
     assert.equal(receivedPayload?.text, 'Say it plainly.');
-    assert.equal(receivedPayload?.stream, false);
+    assert.equal(receivedPayload?.stream, undefined);
     assert.equal(receivedPayload?.speaker, 'Ryan');
     assert.equal(receivedPayload?.emotion, 'calm');
     assert.equal(receivedPayload?.exaggeration, 1.1);
@@ -222,12 +222,12 @@ test('ChatterboxProvider yields streamed audio chunks from the TTS service', asy
 
   const server = await startServer(async (request, response) => {
     assert.equal(request.method, 'POST');
-    assert.equal(request.url, '/synthesize/stream');
+    assert.equal(request.url, '/synthesize');
 
     const payload = await readJsonBody(request);
 
     assert.equal(payload.text, 'Stream this.');
-    assert.equal(payload.stream, true);
+    assert.equal(payload.stream, undefined);
     assert.equal(payload.speaker, 'Ryan');
     assert.equal(payload.emotion, 'neutral');
 

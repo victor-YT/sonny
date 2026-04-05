@@ -74,6 +74,14 @@ export interface VoiceManagerEvent {
 
 export type VoiceManagerListener = (event: VoiceManagerEvent) => void;
 
+interface VoicePipelineTiming {
+  startedAt: number;
+  sttCompleteLogged: boolean;
+  firstTokenLogged: boolean;
+  ttsStartLogged: boolean;
+  audioPlayLogged: boolean;
+}
+
 class VoicePipelineInterruptedError extends Error {
   public constructor(message: string = 'Voice pipeline interrupted') {
     super(message);
@@ -113,8 +121,9 @@ export class VoiceManager {
   private readonly speakerListener: SpeakerListener | undefined;
 
   private state: VoiceManagerState = 'idle';
-  private pipelineTask: Promise<VoiceInteractionResult> | undefined;
+  private pipelineTask: Promise<unknown> | undefined;
   private pipelineAbortController: AbortController | undefined;
+  private currentTiming: VoicePipelineTiming | undefined;
   private started = false;
 
   public constructor(config: VoiceManagerConfig) {
@@ -300,7 +309,39 @@ export class VoiceManager {
     capture: VoiceCaptureResult,
     options: VoiceInteractionOptions = {},
   ): Promise<VoiceInteractionResult> {
-    return this.processCaptureResult(capture, options);
+    return this.processCaptureResult(capture, this.mergeCaptureOptions(capture, options));
+  }
+
+  public async respondToText(
+    userMessage: string,
+    options: {
+      tts?: TtsOptions;
+    } = {},
+  ): Promise<string> {
+    if (this.pipelineTask !== undefined) {
+      throw new Error('Voice pipeline is already processing another request');
+    }
+
+    const abortController = new AbortController();
+    const task = this.runTextPipeline(
+      userMessage,
+      {
+        ...this.defaultTtsOptions,
+        ...options.tts,
+        signal: abortController.signal,
+      },
+      abortController.signal,
+    );
+    this.pipelineTask = task;
+    this.pipelineAbortController = abortController;
+
+    try {
+      return await task;
+    } finally {
+      this.pipelineTask = undefined;
+      this.pipelineAbortController = undefined;
+      this.setState(this.getRestingState());
+    }
   }
 
   public async interruptCurrentInteraction(): Promise<void> {
@@ -369,12 +410,15 @@ export class VoiceManager {
     signal: AbortSignal,
   ): Promise<VoiceInteractionResult> {
     try {
+      const timing = this.startTiming();
       this.setState('transcribing');
       const sttResult = await this.transcribeCapture(capture, {
+        ...capture.sttOptions,
         ...this.defaultSttOptions,
         ...options.stt,
       });
       this.throwIfInterrupted(signal);
+      this.logTiming('stt_complete', timing, 'sttCompleteLogged');
 
       this.emit({
         type: 'transcription',
@@ -387,68 +431,30 @@ export class VoiceManager {
         ...options.tts,
         signal,
       };
-      this.setState('thinking');
-      const thinkingSoundTask = this.playThinkingSound(sttResult.text, ttsOptions, signal);
-      const sentenceAudioTasks: Array<Promise<Buffer>> = [];
-      const responseChunks: string[] = [];
-      let bufferedText = '';
-
-      for await (const chunk of this.gateway.streamChat(sttResult.text, { signal })) {
-        this.throwIfInterrupted(signal);
-
-        if (chunk.type !== 'text' || chunk.text === undefined) {
-          continue;
-        }
-
-        responseChunks.push(chunk.text);
-        bufferedText += chunk.text;
-
-        const extracted = this.extractCompletedSentences(bufferedText);
-
-        bufferedText = extracted.remainder;
-
-        for (const sentence of extracted.sentences) {
-          this.throwIfInterrupted(signal);
-          this.setState('synthesizing');
-          sentenceAudioTasks.push(
-            this.speakStreamingSentence(sentence, ttsOptions, signal),
-          );
-        }
-      }
-
-      const trailingSentence = bufferedText.trim();
-
-      if (trailingSentence.length > 0) {
-        this.throwIfInterrupted(signal);
-        this.setState('synthesizing');
-        sentenceAudioTasks.push(
-          this.speakStreamingSentence(trailingSentence, ttsOptions, signal),
-        );
-      }
-
-      const response = responseChunks.join('');
-      await thinkingSoundTask;
-      this.throwIfInterrupted(signal);
+      const responseResult = await this.streamAssistantResponse(
+        sttResult.text,
+        ttsOptions,
+        signal,
+        timing,
+      );
 
       this.emit({
         type: 'response',
-        text: response,
+        text: responseResult.response,
         wakeWord: options.wakeWord,
       });
-
-      const spokenAudio = Buffer.concat(await Promise.all(sentenceAudioTasks));
 
       const result: VoiceInteractionResult = {
         wakeWord: options.wakeWord,
         transcription: sttResult.text,
-        response,
-        audio: spokenAudio,
+        response: responseResult.response,
+        audio: responseResult.audio,
         sttResult,
       };
 
       this.emit({
         type: 'audio',
-        audio: spokenAudio,
+        audio: responseResult.audio,
         wakeWord: options.wakeWord,
         result,
       });
@@ -460,6 +466,40 @@ export class VoiceManager {
       }
 
       this.handleError(this.toError(error, 'Voice pipeline failed'));
+      throw error;
+    }
+  }
+
+  private async runTextPipeline(
+    userMessage: string,
+    ttsOptions: TtsOptions,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const timing = this.startTiming();
+      const responseResult = await this.streamAssistantResponse(
+        userMessage,
+        ttsOptions,
+        signal,
+        timing,
+      );
+
+      this.emit({
+        type: 'response',
+        text: responseResult.response,
+      });
+      this.emit({
+        type: 'audio',
+        audio: responseResult.audio,
+      });
+
+      return responseResult.response;
+    } catch (error: unknown) {
+      if (this.isInterruptedError(error)) {
+        throw error;
+      }
+
+      this.handleError(this.toError(error, 'Voice text pipeline failed'));
       throw error;
     }
   }
@@ -511,6 +551,19 @@ export class VoiceManager {
     }
 
     return result;
+  }
+
+  private mergeCaptureOptions(
+    capture: VoiceCaptureResult,
+    options: VoiceInteractionOptions,
+  ): VoiceInteractionOptions {
+    return {
+      ...options,
+      stt: {
+        ...capture.sttOptions,
+        ...options.stt,
+      },
+    };
   }
 
   private async transcribeCapture(
@@ -576,6 +629,64 @@ export class VoiceManager {
         error: this.toError(error, 'Thinking sound playback failed'),
       });
     }
+  }
+
+  private async streamAssistantResponse(
+    userMessage: string,
+    ttsOptions: TtsOptions,
+    signal: AbortSignal,
+    timing: VoicePipelineTiming,
+  ): Promise<{ response: string; audio: Buffer }> {
+    this.setState('thinking');
+    const thinkingSoundTask = this.playThinkingSound(userMessage, ttsOptions, signal);
+    const sentenceAudioTasks: Array<Promise<Buffer>> = [];
+    const responseChunks: string[] = [];
+    let bufferedText = '';
+
+    for await (const chunk of this.gateway.streamChat(userMessage, { signal })) {
+      this.throwIfInterrupted(signal);
+
+      if (chunk.type !== 'text' || chunk.text === undefined) {
+        continue;
+      }
+
+      this.logTiming('first_token', timing, 'firstTokenLogged');
+      responseChunks.push(chunk.text);
+      bufferedText += chunk.text;
+
+      const extracted = this.extractCompletedSentences(bufferedText);
+
+      bufferedText = extracted.remainder;
+
+      for (const sentence of extracted.sentences) {
+        this.throwIfInterrupted(signal);
+        this.logTiming('tts_start', timing, 'ttsStartLogged');
+        this.setState('synthesizing');
+        sentenceAudioTasks.push(
+          this.speakStreamingSentence(sentence, ttsOptions, signal),
+        );
+      }
+    }
+
+    const trailingSentence = bufferedText.trim();
+
+    if (trailingSentence.length > 0) {
+      this.throwIfInterrupted(signal);
+      this.logTiming('tts_start', timing, 'ttsStartLogged');
+      this.setState('synthesizing');
+      sentenceAudioTasks.push(
+        this.speakStreamingSentence(trailingSentence, ttsOptions, signal),
+      );
+    }
+
+    const response = responseChunks.join('');
+    await thinkingSoundTask;
+    this.throwIfInterrupted(signal);
+
+    return {
+      response,
+      audio: Buffer.concat(await Promise.all(sentenceAudioTasks)),
+    };
   }
 
   private async synthesizeForPlayback(
@@ -888,6 +999,11 @@ export class VoiceManager {
   }
 
   private handleSpeakerEvent(event: { type: string; error?: Error }): void {
+    if (event.type === 'playback_started') {
+      this.logTiming('audio_play', this.currentTiming, 'audioPlayLogged');
+      return;
+    }
+
     if (event.type === 'error' && event.error !== undefined) {
       if (this.isInterruptedError(event.error)) {
         return;
@@ -981,5 +1097,39 @@ export class VoiceManager {
       error instanceof VoicePipelineInterruptedError ||
       (error instanceof Error && error.name === 'AbortError')
     );
+  }
+
+  private startTiming(): VoicePipelineTiming {
+    const timing: VoicePipelineTiming = {
+      startedAt: Date.now(),
+      sttCompleteLogged: false,
+      firstTokenLogged: false,
+      ttsStartLogged: false,
+      audioPlayLogged: false,
+    };
+
+    this.currentTiming = timing;
+
+    return timing;
+  }
+
+  private logTiming(
+    label: 'stt_complete' | 'first_token' | 'tts_start' | 'audio_play',
+    timing: VoicePipelineTiming | undefined,
+    flag: keyof Pick<
+      VoicePipelineTiming,
+      'sttCompleteLogged' | 'firstTokenLogged' | 'ttsStartLogged' | 'audioPlayLogged'
+    >,
+  ): void {
+    if (timing === undefined || timing[flag]) {
+      return;
+    }
+
+    timing[flag] = true;
+    console.log(`[timing] ${label} ${Date.now() - timing.startedAt}ms`);
+
+    if (flag === 'audioPlayLogged' && this.currentTiming === timing) {
+      this.currentTiming = undefined;
+    }
   }
 }
