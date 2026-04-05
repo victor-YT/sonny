@@ -177,7 +177,7 @@ async function runVoice(
   });
 
   await voiceGateway.start();
-  stdout.write('Voice mode is listening. Type text to chat with TTS output. Press Ctrl+C to stop.\n');
+  stdout.write('Voice mode is listening. Press Enter to talk, type text for TTS chat, Ctrl+C to stop.\n');
 
   const rl = readline.createInterface({
     input: stdin,
@@ -205,6 +205,17 @@ async function runVoice(
       const trimmedInput = input.trim();
 
       if (trimmedInput.length === 0) {
+        stdout.write('[voice] Recording... (up to 5s)\n');
+
+        try {
+          const capture = await voiceGateway.microphone.capture();
+          const result = await voiceGateway.manager.processCapture(capture);
+          stdout.write(`[heard] ${result.transcription}\n`);
+          stdout.write(`[sonny] ${result.response}\n`);
+        } catch (error: unknown) {
+          console.error(`Push-to-talk failed: ${toErrorMessage(error)}`);
+        }
+
         continue;
       }
 
