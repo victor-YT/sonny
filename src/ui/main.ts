@@ -1,8 +1,8 @@
 import { app, ipcMain } from 'electron';
-import { menubar, type Menubar } from 'menubar';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { Menubar } from 'menubar';
 
 import type { Gateway } from '../core/gateway.js';
 import type { LlmMessage } from '../core/providers/llm.js';
@@ -57,6 +57,10 @@ const INLINE_PANEL_HTML = `
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 let activeUiMainApp: UiMainApp | undefined;
+
+console.log(
+  `[ui.main] JS is running modulePath=${__filename} argv1=${process.argv[1] ?? 'undefined'} electron=${process.versions.electron ?? 'undefined'}`,
+);
 
 export interface UiMainStatusSnapshot {
   status: 'idle' | 'listening' | 'thinking' | 'speaking';
@@ -121,7 +125,7 @@ export class UiMainApp {
       }
 
       this.registerIpc();
-      this.menubarApp = this.createMenubar();
+      this.menubarApp = await this.createMenubar();
       console.log('[ui.main] menubar instance created');
       void this.initializeGateway();
 
@@ -168,7 +172,7 @@ export class UiMainApp {
     void this.applyStatus(this.mapVoiceState(voiceManager.currentState));
   }
 
-  private createMenubar(): Menubar {
+  private async createMenubar(): Promise<Menubar> {
     const trayIconDebugInfo = this.trayController.getIconDebugInfo();
 
     console.log(
@@ -181,6 +185,10 @@ export class UiMainApp {
     const tray = this.trayController.create();
 
     console.log('[ui.main] tray icon is set');
+
+    console.log('[ui.main] importing menubar package');
+    const { menubar } = await import('menubar');
+    console.log('[ui.main] menubar package import resolved');
 
     const instance = menubar({
       index: this.panelUrl,
@@ -504,6 +512,11 @@ export class UiMainApp {
 export async function startUiMainApp(
   config: UiMainAppConfig = {},
 ): Promise<UiMainApp> {
+  if (activeUiMainApp !== undefined) {
+    console.log('[ui.main] reusing active UiMainApp instance');
+    return activeUiMainApp;
+  }
+
   const application = new UiMainApp(config);
   activeUiMainApp = application;
   console.log('[ui.main] activeUiMainApp reference retained');
@@ -511,7 +524,25 @@ export async function startUiMainApp(
   return application;
 }
 
-if (process.argv[1] === __filename) {
+function shouldAutoStartUiMainApp(): boolean {
+  const entryArgument = process.argv[1];
+
+  if (entryArgument === undefined) {
+    console.log('[ui.main] auto-start disabled because argv[1] is undefined');
+    return false;
+  }
+
+  const resolvedEntryPath = resolve(process.cwd(), entryArgument);
+  const shouldStart = resolvedEntryPath === __filename;
+
+  console.log(
+    `[ui.main] auto-start check entryArgument=${entryArgument} resolvedEntryPath=${resolvedEntryPath} modulePath=${__filename} shouldStart=${shouldStart}`,
+  );
+
+  return shouldStart;
+}
+
+if (shouldAutoStartUiMainApp()) {
   void (async () => {
     try {
       await startUiMainApp();
