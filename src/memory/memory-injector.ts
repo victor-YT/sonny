@@ -160,10 +160,13 @@ export class MemoryInjector {
         return left.kind === 'recent' ? -1 : 1;
       }
 
-      if (left.kind === 'recent' && right.kind === 'recent') {
+      const leftCreatedAt = getRecentCreatedAt(left);
+      const rightCreatedAt = getRecentCreatedAt(right);
+
+      if (leftCreatedAt !== undefined && rightCreatedAt !== undefined) {
         return (
-          right.item.createdAt.getTime() -
-          left.item.createdAt.getTime()
+          rightCreatedAt.getTime() -
+          leftCreatedAt.getTime()
         );
       }
 
@@ -280,6 +283,18 @@ export class MemoryInjector {
 
     return new Set(tokens);
   }
+}
+
+function isRecentMatch(
+  match: ContextMatch<MemorySnippet> | ContextMatch<RecentMemoryMessage>,
+): match is ContextMatch<RecentMemoryMessage> {
+  return match.kind === 'recent';
+}
+
+function getRecentCreatedAt(
+  match: ContextMatch<MemorySnippet> | ContextMatch<RecentMemoryMessage>,
+): Date | undefined {
+  return isRecentMatch(match) ? match.item.createdAt : undefined;
 }
 
 const STOP_WORDS = new Set([
