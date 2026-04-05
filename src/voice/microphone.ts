@@ -133,6 +133,22 @@ export class Microphone {
     });
 
     source.once('error', (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const isNullExitCode = message.includes('error code null');
+
+      if (isNullExitCode && pcmChunks.length > 0) {
+        console.warn('Microphone: sox exited with null error code, finalizing with captured audio.');
+        finalizeSuccess();
+        return;
+      }
+
+      if (isNullExitCode) {
+        console.warn('Microphone: sox exited with null error code before capturing audio.');
+        finalizeSuccess();
+        return;
+      }
+
+      console.error('Microphone: recording stream error:', message);
       finalizeError(error);
     });
 
