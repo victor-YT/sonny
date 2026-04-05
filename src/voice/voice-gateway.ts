@@ -76,12 +76,15 @@ interface ManagedProcessHandle {
 }
 
 interface RecorderOptions {
-  sampleRateHertz: number;
+  sampleRate: number;
   channels: number;
+  audioType: string;
+  recorder: string;
   threshold: number;
-  verbose: boolean;
-  recordProgram: string;
+  thresholdStart: number;
+  thresholdStop: number;
   silence: string;
+  verbose: boolean;
 }
 
 interface RecorderRuntime {
@@ -650,12 +653,15 @@ class PlaybackVadMonitor {
     const module = await loadModule('node-record-lpcm16');
     const container = resolveExportContainer(module);
     const options: RecorderOptions = {
-      sampleRateHertz: this.sampleRateHertz,
+      sampleRate: this.sampleRateHertz,
       channels: this.channels,
+      audioType: 'wav',
+      recorder: this.recordProgram,
       threshold: 0,
-      verbose: false,
-      recordProgram: this.recordProgram,
+      thresholdStart: 0.5,
+      thresholdStop: 0.5,
       silence: DEFAULT_VAD_SILENCE_SECONDS.toFixed(1),
+      verbose: false,
     };
     const candidates = [
       readFactory(container, 'record'),

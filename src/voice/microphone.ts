@@ -14,12 +14,15 @@ const WAV_PCM_FORMAT = 1;
 const WAV_HEADER_BYTES = 44;
 
 interface RecorderOptions {
-  sampleRateHertz: number;
+  sampleRate: number;
   channels: number;
+  audioType: string;
+  recorder: string;
   threshold: number;
-  verbose: boolean;
-  recordProgram: string;
+  thresholdStart: number;
+  thresholdStop: number;
   silence: string;
+  verbose: boolean;
 }
 
 interface RecorderRuntime {
@@ -57,8 +60,22 @@ export class Microphone {
   }
 
   public async capture(): Promise<VoiceCaptureResult> {
-    const recorder = await this.createRecorder();
-    const source = recorder.stream();
+    let recorder: RecorderRuntime;
+
+    try {
+      recorder = await this.createRecorder();
+    } catch (error: unknown) {
+      throw this.toError(error, 'Failed to initialize microphone recorder');
+    }
+
+    let source: NodeJS.ReadableStream;
+
+    try {
+      source = recorder.stream();
+    } catch (error: unknown) {
+      throw this.toError(error, 'Failed to start microphone recording stream');
+    }
+
     const audioStream = new BufferAsyncIterable();
     const pcmChunks: Buffer[] = [];
     let resolveAudio: ((audio: Buffer) => void) | undefined;
@@ -147,12 +164,15 @@ export class Microphone {
     const module = await this.loadModule(NODE_RECORD_LPCM16_MODULE);
     const container = this.resolveExportContainer(module);
     const options: RecorderOptions = {
-      sampleRateHertz: this.sampleRateHertz,
+      sampleRate: this.sampleRateHertz,
       channels: this.channels,
+      audioType: 'wav',
+      recorder: this.recordProgram,
       threshold: this.threshold,
-      verbose: false,
-      recordProgram: this.recordProgram,
+      thresholdStart: 0.5,
+      thresholdStop: 0.5,
       silence: this.silenceSeconds.toFixed(1),
+      verbose: false,
     };
     const candidates = [
       this.readFactory(container, 'record'),
