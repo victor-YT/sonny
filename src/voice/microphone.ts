@@ -138,7 +138,7 @@ export class Microphone {
           const response = await fetch(vadUrl, {
             method: 'POST',
             headers: { 'content-type': 'application/octet-stream' },
-            body: pcmChunk,
+            body: new Uint8Array(pcmChunk),
           });
 
           if (!response.ok) {

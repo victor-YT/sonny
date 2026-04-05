@@ -615,31 +615,31 @@ export class VoiceManager {
     throw new Error('Voice capture did not provide any audio to transcribe');
   }
 
-  private async playThinkingSound(
-    input: string,
-    options: TtsOptions,
-    signal: AbortSignal,
-    retryState: TtsRetryState,
-  ): Promise<void> {
-    const thinkingSound = getThinkingSound(input);
-
-    if (thinkingSound.trim().length === 0) {
-      return;
-    }
-
-    try {
-      await this.speakStreamingSentence(thinkingSound, options, signal, retryState);
-    } catch (error: unknown) {
-      if (this.isInterruptedError(error)) {
-        return;
-      }
-
-      this.emit({
-        type: 'error',
-        error: this.toError(error, 'Thinking sound playback failed'),
-      });
-    }
-  }
+  // private async playThinkingSound(
+  //   input: string,
+  //   options: TtsOptions,
+  //   signal: AbortSignal,
+  //   retryState: TtsRetryState,
+  // ): Promise<void> {
+  //   const thinkingSound = getThinkingSound(input);
+  //
+  //   if (thinkingSound.trim().length === 0) {
+  //     return;
+  //   }
+  //
+  //   try {
+  //     await this.speakStreamingSentence(thinkingSound, options, signal, retryState);
+  //   } catch (error: unknown) {
+  //     if (this.isInterruptedError(error)) {
+  //       return;
+  //     }
+  //
+  //     this.emit({
+  //       type: 'error',
+  //       error: this.toError(error, 'Thinking sound playback failed'),
+  //     });
+  //   }
+  // }
 
   private async streamAssistantResponse(
     userMessage: string,
