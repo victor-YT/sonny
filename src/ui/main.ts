@@ -105,9 +105,15 @@ export class UiMainApp {
 
   public async start(): Promise<Menubar> {
     try {
-      console.log('[ui.main] waiting for app ready');
+      console.log('[ui.main] before app.whenReady()');
+      app.once('ready', () => {
+        console.log('[ui.main] inside app ready callback');
+      });
+
       await app.whenReady();
-      console.log('[ui.main] app ready event fired');
+      console.log('[ui.main] app.whenReady() resolved');
+      app.dock?.hide();
+      console.log('[ui.main] app.dock.hide() called after ready');
 
       if (this.menubarApp !== undefined) {
         console.log('[ui.main] menubar already created');
@@ -163,15 +169,24 @@ export class UiMainApp {
   }
 
   private createMenubar(): Menubar {
+    const trayIconDebugInfo = this.trayController.getIconDebugInfo();
+
     console.log(
       `[ui.main] creating menubar preloadPath=${this.preloadPath} preloadExists=${existsSync(this.preloadPath)} panelUrl=${this.panelUrl}`,
     );
+    console.log(
+      `[ui.main] tray icon lookup resolvedPath=${trayIconDebugInfo.resolvedPath ?? 'missing'} usingFallback=${trayIconDebugInfo.usingFallback} expectedPaths=${trayIconDebugInfo.expectedPaths.join(', ')}`,
+    );
+
+    const tray = this.trayController.create();
+
+    console.log('[ui.main] tray icon is set');
 
     const instance = menubar({
       index: this.panelUrl,
       tooltip: TOOLTIP,
       preloadWindow: true,
-      tray: this.trayController.create(),
+      tray,
       showDockIcon: false,
       browserWindow: {
         width: PANEL_WINDOW_WIDTH,
@@ -195,6 +210,7 @@ export class UiMainApp {
       console.log('[ui.main] menubar ready event fired');
       app.setName('Sonny');
       app.dock?.hide();
+      console.log('[ui.main] app.dock.hide() called from menubar ready');
       this.trayController.setStatus(this.status.status);
     });
 
@@ -239,9 +255,22 @@ export class UiMainApp {
         `[ui.main] window-all-closed fired stopping=${this.stopping}`,
       );
 
-      if (this.stopping) {
-        app.quit();
+      if (!this.stopping) {
+        console.log(
+          '[ui.main] ignoring window-all-closed because the menubar app should remain running',
+        );
+        return;
       }
+
+      app.quit();
+    });
+
+    app.on('quit', () => {
+      console.log('[ui.main] app quit event fired');
+    });
+
+    process.once('beforeExit', (code) => {
+      console.log(`[ui.main] process beforeExit fired code=${code}`);
     });
 
     return instance;
@@ -476,8 +505,9 @@ export async function startUiMainApp(
   config: UiMainAppConfig = {},
 ): Promise<UiMainApp> {
   const application = new UiMainApp(config);
-  await application.start();
   activeUiMainApp = application;
+  console.log('[ui.main] activeUiMainApp reference retained');
+  await application.start();
   return application;
 }
 

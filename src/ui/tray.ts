@@ -44,6 +44,12 @@ export interface TrayControllerConfig {
   tooltip?: string;
 }
 
+export interface TrayIconDebugInfo {
+  expectedPaths: string[];
+  resolvedPath: string | undefined;
+  usingFallback: boolean;
+}
+
 export class TrayController {
   private readonly tooltip: string;
   private tray: Tray | undefined;
@@ -83,6 +89,17 @@ export class TrayController {
 
   public getStatus(): TrayStatus {
     return this.status;
+  }
+
+  public getIconDebugInfo(): TrayIconDebugInfo {
+    const expectedPaths = this.getExpectedIconPaths();
+    const resolvedPath = this.resolveIconPathFromPaths(expectedPaths);
+
+    return {
+      expectedPaths,
+      resolvedPath,
+      usingFallback: resolvedPath === undefined,
+    };
   }
 
   public setBadge(label?: string): void {
@@ -133,29 +150,21 @@ export class TrayController {
       }
     }
 
-    const style = STATUS_STYLES[status];
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="${ICON_WIDTH}" height="${ICON_HEIGHT}" viewBox="0 0 ${ICON_WIDTH} ${ICON_HEIGHT}">
-        <rect x="1.5" y="4" width="17" height="12" rx="6" fill="#111827" />
-        <circle cx="6.5" cy="10" r="2.5" fill="#ffffff" />
-        <rect x="10" y="8.5" width="5" height="3" rx="1.5" fill="#ffffff" opacity="0.92" />
-      </svg>
-    `.trim();
-    const image = nativeImage.createFromDataURL(
-      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
-    );
-
-    image.setTemplateImage(true);
+    const image = nativeImage.createEmpty();
 
     console.log(
-      `[tray] no tray icon file found, using generated fallback for status=${status} expectedPaths=${this.getExpectedIconPaths().join(', ')}`,
+      `[tray] no tray icon file found, using nativeImage.createEmpty() fallback for status=${status} expectedPaths=${this.getExpectedIconPaths().join(', ')}`,
     );
 
     return image;
   }
 
   private resolveIconPath(): string | undefined {
-    for (const iconPath of this.getExpectedIconPaths()) {
+    return this.resolveIconPathFromPaths(this.getExpectedIconPaths());
+  }
+
+  private resolveIconPathFromPaths(paths: string[]): string | undefined {
+    for (const iconPath of paths) {
       const exists = existsSync(iconPath);
 
       console.log(`[tray] checked icon path ${iconPath} exists=${exists}`);
