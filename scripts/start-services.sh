@@ -9,23 +9,64 @@ PID_DIR="${RUNTIME_ROOT}/pids"
 
 mkdir -p "${LOG_DIR}" "${PID_DIR}"
 
+if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${PROJECT_ROOT}/.env"
+  set +a
+fi
+
 if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
   PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
 else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
 fi
 
+normalize_base_url() {
+  printf '%s\n' "${1%/}"
+}
+
+extract_port_from_url() {
+  local url="$1"
+  local authority="${url#*://}"
+
+  authority="${authority%%/*}"
+
+  if [[ "${authority}" == *:* ]]; then
+    printf '%s\n' "${authority##*:}"
+    return
+  fi
+
+  printf '80\n'
+}
+
+is_port_in_use() {
+  local port="$1"
+
+  lsof -tiTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+is_pid_running() {
+  local pid="$1"
+
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+STT_BASE_URL="$(normalize_base_url "${FASTER_WHISPER_URL:-http://127.0.0.1:8000}")"
+TTS_BASE_URL="$(normalize_base_url "${CHATTERBOX_URL:-http://127.0.0.1:8001}")"
+STT_PORT="$(extract_port_from_url "${STT_BASE_URL}")"
+TTS_PORT="$(extract_port_from_url "${TTS_BASE_URL}")"
+
 services=(
-  "whisper:${PROJECT_ROOT}/scripts/whisper-server.py"
-  "qwen3-tts:${PROJECT_ROOT}/scripts/qwen3-tts-server.py"
-  "wake-word:${PROJECT_ROOT}/scripts/wake-word-server.py"
+  "whisper:${PROJECT_ROOT}/scripts/whisper-server.py:${STT_PORT}"
+  "qwen3-tts:${PROJECT_ROOT}/scripts/qwen3-tts-server.py:${TTS_PORT}"
+  "wake-word:${PROJECT_ROOT}/scripts/wake-word-server.py:"
 )
 
 missing_scripts=()
 
 for service in "${services[@]}"; do
-  name="${service%%:*}"
-  script_path="${service#*:}"
+  IFS=':' read -r name script_path port <<<"${service}"
 
   if [[ ! -f "${script_path}" ]]; then
     missing_scripts+=("${name}:${script_path}")
@@ -42,37 +83,15 @@ if (( ${#missing_scripts[@]} > 0 )); then
   exit 1
 fi
 
-child_pids=()
-
-cleanup() {
-  printf '\nStopping services...\n'
-
-  for pid in "${child_pids[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill "${pid}" 2>/dev/null || true
-    fi
-  done
-
-  for pid_file in "${PID_DIR}"/*.pid; do
-    [[ -f "${pid_file}" ]] && rm -f "${pid_file}"
-  done
-
-  wait 2>/dev/null || true
-  printf 'All services stopped.\n'
-}
-
-trap cleanup EXIT INT TERM
-
 for service in "${services[@]}"; do
-  name="${service%%:*}"
-  script_path="${service#*:}"
+  IFS=':' read -r name script_path port <<<"${service}"
   pid_file="${PID_DIR}/${name}.pid"
   log_file="${LOG_DIR}/${name}.log"
 
   if [[ -f "${pid_file}" ]]; then
     existing_pid="$(<"${pid_file}")"
 
-    if kill -0 "${existing_pid}" 2>/dev/null; then
+    if is_pid_running "${existing_pid}"; then
       printf '%s already running (pid %s)\n' "${name}" "${existing_pid}"
       continue
     fi
@@ -80,12 +99,15 @@ for service in "${services[@]}"; do
     rm -f "${pid_file}"
   fi
 
-  "${PYTHON_BIN}" "${script_path}" >"${log_file}" 2>&1 &
+  if [[ -n "${port}" ]] && is_port_in_use "${port}"; then
+    printf '%s skipped because port %s is already in use\n' "${name}" "${port}"
+    continue
+  fi
+
+  nohup "${PYTHON_BIN}" "${script_path}" >"${log_file}" 2>&1 < /dev/null &
   pid=$!
-  child_pids+=("${pid}")
   printf '%s' "${pid}" >"${pid_file}"
   printf 'Started %s (pid %s) log=%s\n' "${name}" "${pid}" "${log_file}"
 done
 
-printf 'All services running. Press Ctrl+C to stop.\n'
-wait
+printf 'Service startup complete.\n'

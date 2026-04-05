@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import { Gateway } from '../core/gateway.js';
 import { ChatterboxProvider } from './providers/chatterbox.js';
@@ -81,6 +83,13 @@ interface VoicePipelineTiming {
   ttsStartLogged: boolean;
   audioPlayLogged: boolean;
 }
+
+interface TtsRetryState {
+  failures: number;
+}
+
+const TTS_MAX_FAILURES = 3;
+const TTS_INITIAL_BACKOFF_MS = 250;
 
 class VoicePipelineInterruptedError extends Error {
   public constructor(message: string = 'Voice pipeline interrupted') {
@@ -388,7 +397,7 @@ export class VoiceManager {
       const audio = await this.synthesizeForPlayback(processedResponse, {
         ...this.defaultTtsOptions,
         ...options,
-      });
+      }, this.createTtsRetryState());
 
       this.emit({
         type: 'audio',
@@ -610,6 +619,7 @@ export class VoiceManager {
     input: string,
     options: TtsOptions,
     signal: AbortSignal,
+    retryState: TtsRetryState,
   ): Promise<void> {
     const thinkingSound = getThinkingSound(input);
 
@@ -618,7 +628,7 @@ export class VoiceManager {
     }
 
     try {
-      await this.speakStreamingSentence(thinkingSound, options, signal);
+      await this.speakStreamingSentence(thinkingSound, options, signal, retryState);
     } catch (error: unknown) {
       if (this.isInterruptedError(error)) {
         return;
@@ -638,7 +648,13 @@ export class VoiceManager {
     timing: VoicePipelineTiming,
   ): Promise<{ response: string; audio: Buffer }> {
     this.setState('thinking');
-    const thinkingSoundTask = this.playThinkingSound(userMessage, ttsOptions, signal);
+    const retryState = this.createTtsRetryState();
+    const thinkingSoundTask = this.playThinkingSound(
+      userMessage,
+      ttsOptions,
+      signal,
+      retryState,
+    );
     const sentenceAudioTasks: Array<Promise<Buffer>> = [];
     const responseChunks: string[] = [];
     let bufferedText = '';
@@ -663,7 +679,7 @@ export class VoiceManager {
         this.logTiming('tts_start', timing, 'ttsStartLogged');
         this.setState('synthesizing');
         sentenceAudioTasks.push(
-          this.speakStreamingSentence(sentence, ttsOptions, signal),
+          this.speakStreamingSentence(sentence, ttsOptions, signal, retryState),
         );
       }
     }
@@ -675,7 +691,7 @@ export class VoiceManager {
       this.logTiming('tts_start', timing, 'ttsStartLogged');
       this.setState('synthesizing');
       sentenceAudioTasks.push(
-        this.speakStreamingSentence(trailingSentence, ttsOptions, signal),
+        this.speakStreamingSentence(trailingSentence, ttsOptions, signal, retryState),
       );
     }
 
@@ -692,6 +708,7 @@ export class VoiceManager {
   private async synthesizeForPlayback(
     response: ProcessedVoiceResponse,
     options: TtsOptions,
+    retryState: TtsRetryState,
   ): Promise<Buffer> {
     const resolvedOptions = this.resolveTtsOptions(response, options);
     const sentences = this.getPlayableSentences(response);
@@ -705,6 +722,7 @@ export class VoiceManager {
       const audio = await this.synthesizeSentenceForPlayback(
         sentence,
         resolvedOptions,
+        retryState,
       );
       audioChunks.push(audio);
     }
@@ -734,6 +752,56 @@ export class VoiceManager {
   }
 
   private async synthesizeSentenceForPlayback(
+    sentence: ProcessedVoiceResponse['sentences'][number],
+    options: TtsOptions,
+    retryState: TtsRetryState,
+  ): Promise<Buffer> {
+    if (retryState.failures >= TTS_MAX_FAILURES) {
+      throw new Error(
+        `TTS synthesis is disabled after ${TTS_MAX_FAILURES} consecutive failures`,
+      );
+    }
+
+    let attempt = 0;
+
+    while (attempt < TTS_MAX_FAILURES) {
+      this.throwIfAborted(options.signal);
+      attempt += 1;
+
+      try {
+        const audio = await this.synthesizeSentenceForPlaybackOnce(sentence, options);
+
+        retryState.failures = 0;
+        return audio;
+      } catch (error: unknown) {
+        if (this.isInterruptedError(error)) {
+          throw error;
+        }
+
+        retryState.failures += 1;
+        const resolvedError = this.toError(error, 'TTS synthesis failed');
+
+        if (retryState.failures >= TTS_MAX_FAILURES || attempt >= TTS_MAX_FAILURES) {
+          throw new Error(
+            `TTS synthesis failed after ${retryState.failures} consecutive failures: ${resolvedError.message}`,
+          );
+        }
+
+        const backoffMs = TTS_INITIAL_BACKOFF_MS * (2 ** (attempt - 1));
+
+        console.warn(
+          `[voice] TTS synthesis failed (attempt ${attempt}/${TTS_MAX_FAILURES}, consecutive=${retryState.failures}). ` +
+          `Retrying in ${backoffMs}ms: ${resolvedError.message}`,
+        );
+
+        await this.waitWithAbort(backoffMs, options.signal);
+      }
+    }
+
+    throw new Error('TTS synthesis failed after exhausting retries');
+  }
+
+  private async synthesizeSentenceForPlaybackOnce(
     sentence: ProcessedVoiceResponse['sentences'][number],
     options: TtsOptions,
   ): Promise<Buffer> {
@@ -780,11 +848,12 @@ export class VoiceManager {
     text: string,
     options: TtsOptions,
     signal: AbortSignal,
+    retryState: TtsRetryState,
   ): Promise<Buffer> {
     this.throwIfInterrupted(signal);
     const processedResponse = this.responseProcessor.process(text);
 
-    return this.synthesizeForPlayback(processedResponse, options);
+    return this.synthesizeForPlayback(processedResponse, options, retryState);
   }
 
   private extractCompletedSentences(
@@ -1092,6 +1161,12 @@ export class VoiceManager {
     }
   }
 
+  private throwIfAborted(signal: AbortSignal | undefined): void {
+    if (signal?.aborted === true) {
+      throw new VoicePipelineInterruptedError();
+    }
+  }
+
   private isInterruptedError(error: unknown): boolean {
     return (
       error instanceof VoicePipelineInterruptedError ||
@@ -1130,6 +1205,27 @@ export class VoiceManager {
 
     if (flag === 'audioPlayLogged' && this.currentTiming === timing) {
       this.currentTiming = undefined;
+    }
+  }
+
+  private createTtsRetryState(): TtsRetryState {
+    return {
+      failures: 0,
+    };
+  }
+
+  private async waitWithAbort(
+    milliseconds: number,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    try {
+      await delay(milliseconds, undefined, signal === undefined ? undefined : { signal });
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new VoicePipelineInterruptedError();
+      }
+
+      throw error;
     }
   }
 }

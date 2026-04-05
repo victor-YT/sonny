@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import fcntl
 import io
 import logging
 import os
+from pathlib import Path
+import threading
+import sys
 
 import numpy as np
 import soundfile as sf
@@ -24,6 +29,7 @@ DEFAULT_MODEL_ID = os.getenv(
 )
 DEFAULT_LANGUAGE = os.getenv("QWEN3_TTS_LANGUAGE", "English")
 DEFAULT_SPEAKER = os.getenv("QWEN3_TTS_SPEAKER", "Ryan")
+LOCK_PATH = Path(os.getenv("TMPDIR", "/tmp")) / "sonny-services" / "locks" / "qwen3-tts-server.pid"
 
 EMOTION_INSTRUCTIONS = {
     "neutral": "Speak in a natural, balanced, neutral tone.",
@@ -43,24 +49,28 @@ class SynthesizeRequest(BaseModel):
     emotion: str = Field(default="neutral")
     language: str = Field(default=DEFAULT_LANGUAGE)
     speaker: str = Field(default=DEFAULT_SPEAKER)
+    voice: str = Field(default="ryan")
     exaggeration: float = Field(default=1.0, ge=0.25, le=2.0)
 
 
 class Qwen3TTSService:
     def __init__(self) -> None:
         self._model = None
+        self._model_lock = threading.Lock()
+        self._generate_lock = threading.Lock()
 
     def ensure_model(self):
-        if self._model is not None:
+        with self._model_lock:
+            if self._model is not None:
+                return self._model
+
+            from mlx_audio.tts.utils import load
+
+            LOGGER.info("Loading mlx-audio model %s", DEFAULT_MODEL_ID)
+            self._model = load(DEFAULT_MODEL_ID)
+            LOGGER.info("Model loaded successfully")
+
             return self._model
-
-        from mlx_audio.tts.utils import load
-
-        LOGGER.info("Loading mlx-audio model %s", DEFAULT_MODEL_ID)
-        self._model = load(DEFAULT_MODEL_ID)
-        LOGGER.info("Model loaded successfully")
-
-        return self._model
 
     def synthesize(self, request: SynthesizeRequest) -> bytes:
         model = self.ensure_model()
@@ -73,29 +83,31 @@ class Qwen3TTSService:
             "text": request.text,
             "language": request.language or DEFAULT_LANGUAGE,
             "speaker": request.speaker or DEFAULT_SPEAKER,
+            "voice": request.voice or "ryan",
             "instruct": instruct,
         }
-
-        try:
-            results = model.generate(**generate_kwargs)
-        except TypeError:
-            LOGGER.warning(
-                "model.generate does not accept custom voice kwargs; "
-                "falling back to text-only generation",
-            )
-            results = model.generate(text=request.text)
 
         chunks: list[np.ndarray] = []
         sample_rate: int | None = None
 
-        for result in results:
-            chunk = np.asarray(result.audio, dtype=np.float32)
+        with self._generate_lock:
+            try:
+                results = model.generate(**generate_kwargs)
+            except TypeError:
+                LOGGER.warning(
+                    "model.generate does not accept custom voice kwargs; "
+                    "falling back to text-only generation",
+                )
+                results = model.generate(text=request.text)
 
-            if chunk.size == 0:
-                continue
+            for result in results:
+                chunk = np.asarray(result.audio, dtype=np.float32)
 
-            chunks.append(chunk)
-            sample_rate = int(result.sample_rate)
+                if chunk.size == 0:
+                    continue
+
+                chunks.append(chunk)
+                sample_rate = int(result.sample_rate)
 
         if not chunks or sample_rate is None:
             raise RuntimeError("Model did not return any audio")
@@ -133,6 +145,58 @@ app = FastAPI(title="Sonny Qwen3-TTS Service", version="1.0.0")
 service = Qwen3TTSService()
 
 
+class SingleInstancePidLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file: io.TextIOWrapper | None = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = self.path.open("a+", encoding="utf-8")
+
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_file.seek(0)
+            existing_pid = lock_file.read().strip()
+
+            if existing_pid:
+                LOGGER.warning(
+                    "qwen3-tts-server is already running with pid %s. Exiting.",
+                    existing_pid,
+                )
+            else:
+                LOGGER.warning("qwen3-tts-server is already running. Exiting.")
+
+            lock_file.close()
+            return False
+
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        os.fsync(lock_file.fileno())
+        self._file = lock_file
+
+        return True
+
+    def release(self) -> None:
+        if self._file is None:
+            return
+
+        try:
+            self._file.seek(0)
+            self._file.truncate()
+            self._file.flush()
+        finally:
+            fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+            self._file.close()
+            self._file = None
+
+
+PROCESS_LOCK = SingleInstancePidLock(LOCK_PATH)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {
@@ -157,12 +221,21 @@ async def synthesize(request: SynthesizeRequest) -> Response:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(
-        app,
-        host=DEFAULT_HOST,
-        port=DEFAULT_PORT,
-        reload=False,
-    )
+
+    if not PROCESS_LOCK.acquire():
+        sys.exit(0)
+
+    atexit.register(PROCESS_LOCK.release)
+
+    try:
+        uvicorn.run(
+            app,
+            host=DEFAULT_HOST,
+            port=DEFAULT_PORT,
+            reload=False,
+        )
+    finally:
+        PROCESS_LOCK.release()
 
 
 if __name__ == "__main__":
