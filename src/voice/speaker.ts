@@ -4,13 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  detectRuntimePlatform,
+  type RuntimePlatform,
+} from '../core/config.js';
+import {
   type StreamingAudioQueue,
   type StreamingAudioQueueEvent,
   type StreamingAudioQueueItemMetadata,
   type StreamingAudioQueueListener,
 } from './streaming-audio-queue.js';
 
-const DEFAULT_PLAYER_COMMAND = 'afplay';
 const TEMP_DIR_PREFIX = 'sonny-speaker-';
 const TEMP_FILE_NAME = 'response.audio';
 
@@ -36,6 +39,7 @@ export type SpeakerListener = (event: SpeakerEvent) => void;
 export interface SpeakerConfig {
   audioQueue: StreamingAudioQueue;
   playerCommand?: string;
+  platform?: RuntimePlatform;
 }
 
 interface PlaybackItem {
@@ -44,9 +48,15 @@ interface PlaybackItem {
   audio: Buffer;
 }
 
+interface PlayerInvocation {
+  command: string;
+  args: string[];
+}
+
 export class Speaker {
   private readonly audioQueue: StreamingAudioQueue;
-  private readonly playerCommand: string;
+  private readonly playerCommand: string | undefined;
+  private readonly platform: RuntimePlatform;
   private readonly listeners = new Set<SpeakerListener>();
   private readonly queuedChunks = new Map<string, Buffer[]>();
   private readonly itemMetadata = new Map<string, StreamingAudioQueueItemMetadata | undefined>();
@@ -63,7 +73,8 @@ export class Speaker {
 
   public constructor(config: SpeakerConfig) {
     this.audioQueue = config.audioQueue;
-    this.playerCommand = config.playerCommand ?? DEFAULT_PLAYER_COMMAND;
+    this.playerCommand = config.playerCommand;
+    this.platform = detectRuntimePlatform(config.platform);
     this.queueListener = (event) => {
       void this.handleQueueEvent(event);
     };
@@ -251,8 +262,32 @@ export class Speaker {
   }
 
   private async runPlayer(audioPath: string): Promise<void> {
-    const child = spawn(this.playerCommand, [audioPath], {
+    const invocations = this.resolvePlayerInvocations(audioPath);
+    let missingCommandError: Error | undefined;
+
+    for (const invocation of invocations) {
+      try {
+        await this.spawnAndWait(invocation);
+        return;
+      } catch (error: unknown) {
+        if (this.isMissingCommandError(error)) {
+          missingCommandError = error;
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (missingCommandError !== undefined) {
+      throw new Error(this.buildMissingPlayerMessage(missingCommandError));
+    }
+  }
+
+  private async spawnAndWait(invocation: PlayerInvocation): Promise<void> {
+    const child = spawn(invocation.command, invocation.args, {
       stdio: 'ignore',
+      windowsHide: true,
     });
 
     this.currentProcess = child;
@@ -276,13 +311,86 @@ export class Speaker {
 
           reject(
             new Error(
-              `${this.playerCommand} exited with code ${code ?? 'unknown'} and signal ${signal ?? 'none'}`,
+              `${invocation.command} exited with code ${code ?? 'unknown'} and signal ${signal ?? 'none'}`,
             ),
           );
         });
       });
     } finally {
       this.currentProcess = undefined;
+    }
+  }
+
+  private resolvePlayerInvocations(audioPath: string): PlayerInvocation[] {
+    if (this.playerCommand !== undefined) {
+      return [{
+        command: this.playerCommand,
+        args: [audioPath],
+      }];
+    }
+
+    switch (this.platform) {
+      case 'darwin':
+        return [{
+          command: 'afplay',
+          args: [audioPath],
+        }];
+      case 'win32':
+        return [{
+          command: 'powershell',
+          args: [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            [
+              `Add-Type -AssemblyName System`,
+              `$player = New-Object System.Media.SoundPlayer('${this.escapePowerShellString(audioPath)}')`,
+              '$player.PlaySync()',
+            ].join('; '),
+          ],
+        }];
+      default:
+        return [
+          {
+            command: 'paplay',
+            args: [audioPath],
+          },
+          {
+            command: 'aplay',
+            args: [audioPath],
+          },
+          {
+            command: 'ffplay',
+            args: ['-nodisp', '-autoexit', '-loglevel', 'quiet', audioPath],
+          },
+        ];
+    }
+  }
+
+  private escapePowerShellString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private isMissingCommandError(error: unknown): error is NodeJS.ErrnoException {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+  }
+
+  private buildMissingPlayerMessage(error: Error): string {
+    const configuredCommand = this.playerCommand;
+
+    if (configuredCommand !== undefined) {
+      return `Audio playback command "${configuredCommand}" is not available: ${error.message}`;
+    }
+
+    switch (this.platform) {
+      case 'win32':
+        return `Windows audio playback failed because PowerShell is not available: ${error.message}`;
+      case 'darwin':
+        return `macOS audio playback failed because afplay is not available: ${error.message}`;
+      default:
+        return `Linux audio playback requires one of paplay, aplay, or ffplay: ${error.message}`;
     }
   }
 

@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import sys
 import wave
 from dataclasses import dataclass
 from typing import Iterator
@@ -27,6 +28,7 @@ DEFAULT_MODEL_ID = os.getenv(
 DEFAULT_LANGUAGE = os.getenv("QWEN3_TTS_LANGUAGE", "English")
 DEFAULT_SPEAKER = os.getenv("QWEN3_TTS_SPEAKER", "Ryan")
 DEFAULT_CHUNK_BYTES = 32_768
+DEFAULT_BACKEND = os.getenv("SONNY_TTS_BACKEND", "auto").strip().lower()
 
 EMOTION_INSTRUCTIONS = {
     "neutral": "Speak in a natural, balanced, neutral tone.",
@@ -56,7 +58,7 @@ class GeneratedAudio:
     sample_rate: int
 
 
-class Qwen3TTSService:
+class Qwen3Backend:
     def __init__(self) -> None:
         self._model = None
 
@@ -171,6 +173,116 @@ class Qwen3TTSService:
         return f"{base_instruction} {intensity}"
 
 
+class ChatterboxBackend:
+    def __init__(self) -> None:
+        self._model = None
+
+    def synthesize(self, request: SynthesizeRequest) -> GeneratedAudio:
+        model = self._ensure_model()
+        generate_kwargs: dict[str, float] = {}
+
+        if request.exaggeration != 1.0:
+            generate_kwargs["exaggeration"] = request.exaggeration
+
+        audio = model.generate(
+            request.text,
+            **generate_kwargs,
+        )
+        sample_rate = int(getattr(model, "sr", 24_000))
+        wav_bytes = encode_wav_bytes(self._to_numpy(audio), sample_rate)
+
+        return GeneratedAudio(
+            wav_bytes=wav_bytes,
+            sample_rate=sample_rate,
+        )
+
+    def _ensure_model(self):
+        if self._model is not None:
+            return self._model
+
+        try:
+            import torch
+            from chatterbox.tts import ChatterboxTTS
+        except ImportError as error:
+            raise RuntimeError(
+                "Chatterbox dependencies are missing. Install fastapi, uvicorn, "
+                "numpy, torch, and chatterbox-tts before starting this service."
+            ) from error
+
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+        LOGGER.info(
+            "Loading Chatterbox TTS model on %s",
+            device,
+        )
+
+        self._model = ChatterboxTTS.from_pretrained(device=device)
+
+        return self._model
+
+    def _to_numpy(self, audio) -> np.ndarray:
+        if hasattr(audio, "detach"):
+            audio = audio.detach()
+
+        if hasattr(audio, "cpu"):
+            audio = audio.cpu()
+
+        if hasattr(audio, "numpy"):
+            audio = audio.numpy()
+
+        array = np.asarray(audio, dtype=np.float32)
+
+        if array.ndim > 1:
+            array = array.reshape(-1)
+
+        return array
+
+
+class Qwen3TTSService:
+    def __init__(self) -> None:
+        self._backend = None
+        self._backend_name = "uninitialized"
+
+    @property
+    def backend_name(self) -> str:
+        self._ensure_backend()
+        return self._backend_name
+
+    def synthesize(self, request: SynthesizeRequest) -> GeneratedAudio:
+        backend = self._ensure_backend()
+        return backend.synthesize(request)
+
+    def _ensure_backend(self):
+        if self._backend is not None:
+            return self._backend
+
+        preferred_backend = resolve_backend_name()
+
+        if preferred_backend == "chatterbox":
+            self._backend = ChatterboxBackend()
+            self._backend_name = "chatterbox"
+            return self._backend
+
+        self._backend = Qwen3Backend()
+        self._backend_name = "qwen3"
+        return self._backend
+
+
+def resolve_backend_name() -> str:
+    if DEFAULT_BACKEND in {"qwen3", "chatterbox"}:
+        return DEFAULT_BACKEND
+
+    if sys.platform == "win32":
+        return "chatterbox"
+
+    return "qwen3"
+
+
 def encode_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     normalized = np.clip(audio, -1.0, 1.0)
     pcm = (normalized * 32767).astype(np.int16)
@@ -198,7 +310,8 @@ service = Qwen3TTSService()
 async def health() -> dict[str, str]:
     return {
         "status": "ok",
-        "model": DEFAULT_MODEL_ID,
+        "backend": service.backend_name,
+        "model": DEFAULT_MODEL_ID if service.backend_name == "qwen3" else "ChatterboxTTS",
     }
 
 
