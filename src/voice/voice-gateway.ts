@@ -2,6 +2,7 @@ import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import type { Gateway } from '../core/gateway.js';
 import { StreamingAudioQueue } from './streaming-audio-queue.js';
 import { Microphone, type MicrophoneConfig } from './microphone.js';
+import { PorcupineProvider } from './providers/porcupine.js';
 import type { SttOptions, SttProvider } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type { WakeWordProvider } from './providers/wake-word.js';
@@ -27,6 +28,7 @@ export interface VoiceEnvironmentConfig {
   ollamaBaseUrl?: string;
   ollamaModel?: string;
   porcupineAccessKey?: string;
+  porcupineWakeWord?: string;
   wakeWords?: string[];
   porcupineModelPath?: string;
   wakeWordSensitivity?: number;
@@ -60,7 +62,9 @@ export class VoiceGateway {
     this.manager = new VoiceManager({
       gateway: config.gateway,
       runtimeConfig,
-      wakeWordProvider: config.wakeWordProvider,
+      wakeWordProvider:
+        config.wakeWordProvider ??
+        this.createWakeWordProvider(config, runtimeConfig),
       sttProvider: config.sttProvider,
       ttsProvider: config.ttsProvider,
       captureAudio: async () => this.microphone.capture(),
@@ -96,6 +100,24 @@ export class VoiceGateway {
 
     return undefined;
   }
+
+  private createWakeWordProvider(
+    config: VoiceGatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): WakeWordProvider | undefined {
+    if (config.wakeWordProvider !== undefined) {
+      return config.wakeWordProvider;
+    }
+
+    if (runtimeConfig === undefined) {
+      return undefined;
+    }
+
+    return new PorcupineProvider({
+      accessKey: runtimeConfig.voice.porcupine.accessKey,
+      keywords: [runtimeConfig.voice.porcupine.wakeWord],
+    });
+  }
 }
 
 export function createVoiceGatewayFromEnvironment(
@@ -104,6 +126,11 @@ export function createVoiceGatewayFromEnvironment(
 ): VoiceGateway {
   const runtimeConfig = loadConfig();
   const config = readVoiceEnvironmentConfig(environment);
+  const resolvedWakeWords = config.wakeWords?.length
+    ? config.wakeWords
+    : [config.porcupineWakeWord ?? runtimeConfig.voice.porcupine.wakeWord];
+  const resolvedAccessKey =
+    config.porcupineAccessKey ?? runtimeConfig.voice.porcupine.accessKey;
 
   return new VoiceGateway({
     gateway,
@@ -121,13 +148,18 @@ export function createVoiceGatewayFromEnvironment(
           url: config.ttsBaseUrl ?? runtimeConfig.voice.chatterbox.url,
         },
         porcupine: {
-          accessKey:
-            config.porcupineAccessKey ?? runtimeConfig.voice.porcupine.accessKey,
-          wakeWord:
-            config.wakeWords?.[0] ?? runtimeConfig.voice.porcupine.wakeWord,
+          accessKey: resolvedAccessKey,
+          wakeWord: resolvedWakeWords[0] ?? runtimeConfig.voice.porcupine.wakeWord,
         },
       },
     },
+    wakeWordProvider: new PorcupineProvider({
+      accessKey: resolvedAccessKey,
+      keywords: resolvedWakeWords,
+      sensitivity: config.wakeWordSensitivity,
+      audioDeviceIndex: config.audioDeviceIndex,
+      modelPath: config.porcupineModelPath,
+    }),
     microphoneConfig: {
       sampleRateHertz: config.micSampleRateHertz,
       silenceSeconds: config.micSilenceSeconds,
@@ -156,6 +188,9 @@ export function readVoiceEnvironmentConfig(
     porcupineAccessKey:
       environment.PORCUPINE_ACCESS_KEY ??
       environment.SONNY_PORCUPINE_ACCESS_KEY,
+    porcupineWakeWord:
+      environment.PORCUPINE_WAKE_WORD ??
+      environment.SONNY_PORCUPINE_WAKE_WORD,
     wakeWords: parseWakeWords(environment.SONNY_WAKE_WORDS),
     porcupineModelPath: environment.SONNY_PORCUPINE_MODEL_PATH,
     wakeWordSensitivity: parseOptionalNumber(environment.SONNY_WAKE_WORD_SENSITIVITY),
