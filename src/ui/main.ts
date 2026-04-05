@@ -1,5 +1,5 @@
 import { app, ipcMain } from 'electron';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Menubar } from 'menubar';
@@ -16,44 +16,6 @@ const TOOLTIP = 'Sonny';
 const MAX_CONVERSATION_ENTRIES = 24;
 const DEFAULT_SYSTEM_PROMPT =
   'You are Sonny, a local-first assistant with TARS energy: concise, pragmatic, and mildly unimpressed by avoidable mistakes. Give direct answers, make clear recommendations, and keep the jokes dry enough to pass for diagnostics. Prefer useful action over ceremony. If a request is vague, pin it down fast and move.';
-const INLINE_PANEL_HTML = `
-  <!doctype html>
-  <html lang="en">
-    <head>
-      <meta charset="utf-8" />
-      <title>Sonny</title>
-      <style>
-        body {
-          margin: 0;
-          font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
-          background: #10161f;
-          color: #f4f7fb;
-          display: grid;
-          place-items: center;
-          min-height: 100vh;
-        }
-        main {
-          width: min(280px, calc(100vw - 48px));
-        }
-        h1 {
-          font-size: 16px;
-          margin: 0 0 8px;
-        }
-        p {
-          margin: 0;
-          color: #9fb0c4;
-        }
-      </style>
-    </head>
-    <body>
-      <main>
-        <h1>Sonny is running</h1>
-        <p>The panel bundle was not found, so this fallback view is being used.</p>
-      </main>
-    </body>
-  </html>
-`.trim();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 let activeUiMainApp: UiMainApp | undefined;
@@ -287,8 +249,6 @@ export class UiMainApp {
 
   private resolvePanelUrl(): string {
     const distPanelHtmlPath = join(__dirname, 'panel', 'index.html');
-    const sourcePanelHtmlPath = join(process.cwd(), 'src', 'ui', 'panel', 'index.html');
-    const builtPanelScriptPath = join(__dirname, 'panel', 'panel.js');
 
     console.log(
       `[ui.main] checked panel path ${distPanelHtmlPath} exists=${existsSync(distPanelHtmlPath)}`,
@@ -298,23 +258,9 @@ export class UiMainApp {
       return pathToFileURL(distPanelHtmlPath).toString();
     }
 
-    console.log(
-      `[ui.main] checked panel path ${sourcePanelHtmlPath} exists=${existsSync(sourcePanelHtmlPath)}`,
+    throw new Error(
+      `Panel HTML is missing at ${distPanelHtmlPath}. Run pnpm build to generate dist/ui/panel/index.html.`,
     );
-    console.log(
-      `[ui.main] checked panel script path ${builtPanelScriptPath} exists=${existsSync(builtPanelScriptPath)}`,
-    );
-
-    if (existsSync(sourcePanelHtmlPath) && existsSync(builtPanelScriptPath)) {
-      console.log(
-        `[ui.main] using source panel html with built script ${builtPanelScriptPath}`,
-      );
-      return this.createPanelHtmlDataUrl(sourcePanelHtmlPath, builtPanelScriptPath);
-    }
-
-    console.warn('[ui.main] no usable panel assets found, using inline fallback HTML');
-
-    return `data:text/html;charset=utf-8,${encodeURIComponent(INLINE_PANEL_HTML)}`;
   }
 
   private registerIpc(): void {
@@ -555,20 +501,6 @@ export class UiMainApp {
       console.error('[ui.main] failed to create default gateway', error);
       throw error;
     }
-  }
-
-  private createPanelHtmlDataUrl(
-    sourceHtmlPath: string,
-    builtPanelScriptPath: string,
-  ): string {
-    const sourceHtml = readFileSync(sourceHtmlPath, 'utf8');
-    const builtPanelScript = readFileSync(builtPanelScriptPath, 'utf8');
-    const rewrittenHtml = sourceHtml.replace(
-      '<script type="module" src="./panel.js"></script>',
-      `<script type="module">\n${builtPanelScript}\n</script>`,
-    );
-
-    return `data:text/html;charset=utf-8,${encodeURIComponent(rewrittenHtml)}`;
   }
 }
 

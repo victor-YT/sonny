@@ -6,10 +6,14 @@ const { Jimp, rgbaToInt } = require('jimp');
 const PROJECT_ROOT = process.cwd();
 const SOURCE_ASSET_DIR = path.join(PROJECT_ROOT, 'src', 'ui', 'assets');
 const DIST_ASSET_DIR = path.join(PROJECT_ROOT, 'dist', 'ui', 'assets');
+const SOURCE_PANEL_HTML_PATH = path.join(PROJECT_ROOT, 'src', 'ui', 'panel', 'index.html');
+const DIST_PANEL_DIR = path.join(PROJECT_ROOT, 'dist', 'ui', 'panel');
+const DIST_PANEL_HTML_PATH = path.join(DIST_PANEL_DIR, 'index.html');
 
 async function main() {
   await generateTrayIcons();
   await copyAssetsToDist();
+  copyPanelHtmlToDist();
 }
 
 async function generateTrayIcons() {
@@ -135,6 +139,11 @@ async function copyAssetsToDist() {
   }
 
   await cp(SOURCE_ASSET_DIR, DIST_ASSET_DIR, { recursive: true });
+}
+
+function copyPanelHtmlToDist() {
+  mkdirSync(DIST_PANEL_DIR, { recursive: true });
+  copyFileSync(SOURCE_PANEL_HTML_PATH, DIST_PANEL_HTML_PATH);
 }
 
 main().catch((error) => {
