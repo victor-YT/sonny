@@ -319,7 +319,18 @@ export class UiMainApp {
       try {
         const gateway = await this.ensureGateway();
         console.log('[ui.main] gateway resolved for IPC send-message');
-        const response = await gateway.chat(trimmedMessage);
+        const responseChunks: string[] = [];
+
+        for await (const chunk of gateway.streamChat(trimmedMessage)) {
+          if (chunk.type !== 'text' || chunk.text === undefined) {
+            continue;
+          }
+
+          responseChunks.push(chunk.text);
+          this.broadcastStreamToken(chunk.text);
+        }
+
+        const response = responseChunks.join('');
 
         console.log(
           `[ui.main] gateway chat resolved responseLength=${response.length}`,
@@ -361,6 +372,10 @@ export class UiMainApp {
 
   private broadcastStatus(): void {
     this.menubarApp?.window?.webContents.send('ui:status-changed', this.status);
+  }
+
+  private broadcastStreamToken(token: string): void {
+    this.menubarApp?.window?.webContents.send('gateway:stream-token', token);
   }
 
   private appendConversation(

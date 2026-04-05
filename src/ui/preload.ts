@@ -24,6 +24,7 @@ export interface SonnyBridge {
   hideCapsule(): Promise<void>;
   togglePanel(): Promise<void>;
   onStatusChanged(listener: (snapshot: UiStatusSnapshot) => void): () => void;
+  onStreamToken(listener: (token: string) => void): () => void;
 }
 
 const sonnyBridge: SonnyBridge = {
@@ -85,6 +86,24 @@ const sonnyBridge: SonnyBridge = {
 
     return () => {
       ipcRenderer.removeListener('ui:status-changed', wrappedListener);
+    };
+  },
+  onStreamToken: (listener) => {
+    console.log('[ui.preload] registering gateway:stream-token listener');
+    const wrappedListener = (
+      _event: Electron.IpcRendererEvent,
+      token: string,
+    ) => {
+      console.log(
+        `[ui.preload] gateway:stream-token received tokenLength=${token.length}`,
+      );
+      listener(token);
+    };
+
+    ipcRenderer.on('gateway:stream-token', wrappedListener);
+
+    return () => {
+      ipcRenderer.removeListener('gateway:stream-token', wrappedListener);
     };
   },
 };

@@ -4,6 +4,7 @@ const statusDotElement = queryRequired<HTMLElement>('#status-dot');
 const composerFormElement = queryRequired<HTMLFormElement>('#composer-form');
 const composerInputElement = queryRequired<HTMLInputElement>('#composer-input');
 const composerButtonElement = queryRequired<HTMLButtonElement>('#composer-button');
+let pendingAssistantMessageElement: HTMLElement | undefined;
 
 console.log('[ui.panel] panel script loaded');
 
@@ -18,6 +19,9 @@ async function initializePanel(): Promise<void> {
   window.sonny.onStatusChanged((snapshot) => {
     console.log(`[ui.panel] status changed status=${snapshot.status}`);
     renderStatus(snapshot);
+  });
+  window.sonny.onStreamToken((token) => {
+    appendStreamToken(token);
   });
 
   composerFormElement.addEventListener('submit', async (event) => {
@@ -35,19 +39,17 @@ async function initializePanel(): Promise<void> {
 
     try {
       console.log('[ui.panel] calling window.sonny.sendMessage');
+      appendMessage('user', message);
+      composerInputElement.value = '';
+      pendingAssistantMessageElement = appendMessage('assistant', '');
       const response = await window.sonny.sendMessage(message);
       console.log(
         `[ui.panel] sendMessage resolved responseLength=${response.length}`,
       );
-      composerInputElement.value = '';
-      appendMessage('user', message);
-      appendMessage('assistant', response);
+      finalizePendingAssistantMessage(response);
     } catch (error: unknown) {
       console.error('[ui.panel] sendMessage failed', error);
-      appendMessage(
-        'assistant',
-        `Message failed: ${toErrorMessage(error)}`,
-      );
+      finalizePendingAssistantMessage(`Message failed: ${toErrorMessage(error)}`);
     } finally {
       composerButtonElement.disabled = false;
       composerInputElement.disabled = false;
@@ -82,7 +84,10 @@ function renderConversation(
   }
 }
 
-function appendMessage(role: 'user' | 'assistant', content: string): void {
+function appendMessage(
+  role: 'user' | 'assistant',
+  content: string,
+): HTMLElement {
   const emptyState = conversationElement.querySelector('.empty');
 
   if (emptyState !== null) {
@@ -95,6 +100,29 @@ function appendMessage(role: 'user' | 'assistant', content: string): void {
 
   conversationElement.append(messageElement);
   conversationElement.scrollTop = conversationElement.scrollHeight;
+
+  return messageElement;
+}
+
+function appendStreamToken(token: string): void {
+  if (pendingAssistantMessageElement === undefined) {
+    pendingAssistantMessageElement = appendMessage('assistant', token);
+    return;
+  }
+
+  pendingAssistantMessageElement.textContent =
+    (pendingAssistantMessageElement.textContent ?? '') + token;
+  conversationElement.scrollTop = conversationElement.scrollHeight;
+}
+
+function finalizePendingAssistantMessage(content: string): void {
+  if (pendingAssistantMessageElement === undefined) {
+    pendingAssistantMessageElement = appendMessage('assistant', content);
+  } else {
+    pendingAssistantMessageElement.textContent = content;
+  }
+
+  pendingAssistantMessageElement = undefined;
 }
 
 function getStatusColor(status: string): string {
