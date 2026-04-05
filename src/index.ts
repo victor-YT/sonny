@@ -133,7 +133,10 @@ async function initializeMonitoringRuntime(runtime: {
   await runtime.proactiveAgent.start();
 }
 
-async function runVoice(voiceGateway: VoiceGateway): Promise<void> {
+async function runVoice(
+  voiceGateway: VoiceGateway,
+  gateway: Gateway,
+): Promise<void> {
   voiceGateway.manager.onEvent((event) => {
     if (event.type === 'state_changed' && event.state !== undefined) {
       stdout.write(`[voice] state=${event.state}\n`);
@@ -161,11 +164,56 @@ async function runVoice(voiceGateway: VoiceGateway): Promise<void> {
   });
 
   await voiceGateway.start();
-  stdout.write('Voice mode is listening. Press Ctrl+C to stop.\n');
+  stdout.write('Voice mode is listening. Type text to chat with TTS output. Press Ctrl+C to stop.\n');
+
+  const rl = readline.createInterface({
+    input: stdin,
+    output: stdout,
+  });
+
+  let shouldExit = false;
+
+  rl.on('SIGINT', () => {
+    shouldExit = true;
+    stdout.write('\n');
+    rl.close();
+  });
+
+  const readLoop = async (): Promise<void> => {
+    while (!shouldExit) {
+      let input: string;
+
+      try {
+        input = await rl.question('> ');
+      } catch {
+        break;
+      }
+
+      const trimmedInput = input.trim();
+
+      if (trimmedInput.length === 0) {
+        continue;
+      }
+
+      if (trimmedInput === 'exit' || trimmedInput === 'quit') {
+        shouldExit = true;
+        break;
+      }
+
+      try {
+        const response = await gateway.chat(trimmedInput);
+        stdout.write(`${response}\n`);
+        await voiceGateway.manager.speak(response);
+      } catch (error: unknown) {
+        console.error(`Message failed: ${toErrorMessage(error)}`);
+      }
+    }
+  };
 
   try {
-    await once(process, 'SIGINT');
+    await readLoop();
   } finally {
+    rl.close();
     await voiceGateway.stop();
   }
 }
@@ -205,7 +253,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      await runVoice(voiceGateway);
+      await runVoice(voiceGateway, gateway);
     } finally {
       monitoringRuntime.scheduler.stop();
       await monitoringRuntime.proactiveAgent.stop();
