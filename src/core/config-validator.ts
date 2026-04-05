@@ -58,20 +58,7 @@ export function validateConfig(value: unknown): RuntimeConfig {
       chatterbox: {
         url: readUrl(chatterbox, 'config.voice.chatterbox.url', issues, 'url'),
       },
-      porcupine: {
-        url: readUrl(
-          porcupine,
-          'config.voice.porcupine.url',
-          issues,
-          'url',
-        ),
-        wakeWords: readStringArray(
-          porcupine,
-          'config.voice.porcupine.wakeWords',
-          issues,
-          'wakeWords',
-        ),
-      },
+      porcupine: readPorcupineConfig(porcupine, issues),
     },
     memory: {
       retentionDays: readPositiveInteger(
@@ -198,6 +185,31 @@ function readUrl(
   return value;
 }
 
+function readOptionalUrl(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): string | undefined {
+  const value = readOptionalString(root, path, issues, ...segments);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value);
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      issues.push(`${path} must use http:// or https://.`);
+    }
+  } catch {
+    issues.push(`${path} must be a valid URL.`);
+  }
+
+  return value;
+}
+
 function readStringArray(
   root: Record<string, unknown> | undefined,
   path: string,
@@ -222,6 +234,40 @@ function readStringArray(
 
   if (normalizedValues.length === 0) {
     issues.push(`${path} must contain at least one wake word.`);
+  }
+
+  return normalizedValues;
+}
+
+function readOptionalStringArray(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): string[] | undefined {
+  const value = readOptionalNestedValue(root, ...segments);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    issues.push(`${path} must be an array of non-empty strings.`);
+    return undefined;
+  }
+
+  const normalizedValues = value.flatMap((entry) => {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      issues.push(`${path} must contain only non-empty strings.`);
+      return [];
+    }
+
+    return [entry.trim()];
+  });
+
+  if (normalizedValues.length === 0) {
+    issues.push(`${path} must contain at least one wake word.`);
+    return undefined;
   }
 
   return normalizedValues;
@@ -316,6 +362,26 @@ function readString(
   return value;
 }
 
+function readOptionalString(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): string | undefined {
+  const value = readOptionalNestedValue(root, ...segments);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    issues.push(`${path} must be a non-empty string.`);
+    return undefined;
+  }
+
+  return value.trim();
+}
+
 function readNestedValue(
   root: Record<string, unknown> | undefined,
   path: string,
@@ -338,6 +404,79 @@ function readNestedValue(
   }
 
   return current;
+}
+
+function readOptionalNestedValue(
+  root: Record<string, unknown> | undefined,
+  ...segments: string[]
+): unknown {
+  let current: unknown = root;
+
+  for (const segment of segments) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+
+    current = current[segment];
+  }
+
+  return current;
+}
+
+function readPorcupineConfig(
+  porcupine: Record<string, unknown> | undefined,
+  issues: string[],
+): RuntimeConfig['voice']['porcupine'] {
+  const wakeWords =
+    readOptionalStringArray(
+      porcupine,
+      'config.voice.porcupine.wakeWords',
+      issues,
+      'wakeWords',
+    ) ??
+    (() => {
+      const wakeWord = readOptionalString(
+        porcupine,
+        'config.voice.porcupine.wakeWord',
+        issues,
+        'wakeWord',
+      );
+
+      return wakeWord === undefined ? undefined : [wakeWord];
+    })();
+
+  if (wakeWords === undefined || wakeWords.length === 0) {
+    issues.push(
+      'config.voice.porcupine must provide wakeWord or wakeWords.',
+    );
+  }
+
+  const wakeWord =
+    readOptionalString(
+      porcupine,
+      'config.voice.porcupine.wakeWord',
+      issues,
+      'wakeWord',
+    ) ??
+    wakeWords?.[0] ??
+    '';
+
+  return {
+    url: readOptionalUrl(
+      porcupine,
+      'config.voice.porcupine.url',
+      issues,
+      'url',
+    ),
+    accessKey: readOptionalString(
+      porcupine,
+      'config.voice.porcupine.accessKey',
+      issues,
+      'accessKey',
+    ),
+    wakeWord,
+    wakeWords: wakeWords ?? [],
+  };
 }
 
 function expectNestedRecord(

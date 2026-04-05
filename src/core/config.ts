@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
 import type { PermissionLevel } from '../skills/permissions.js';
 import { ConfigValidationError, validateConfig } from './config-validator.js';
@@ -20,7 +21,9 @@ export interface ChatterboxRuntimeConfig {
 }
 
 export interface PorcupineRuntimeConfig {
-  url: string;
+  url?: string;
+  accessKey?: string;
+  wakeWord: string;
   wakeWords: string[];
 }
 
@@ -50,6 +53,16 @@ export interface RuntimeConfig {
   voice: VoiceRuntimeConfig;
   memory: MemoryRuntimeConfig;
   skills: SkillsRuntimeConfig;
+}
+
+export interface RuntimeConfigUpdate {
+  ollama?: Partial<OllamaRuntimeConfig>;
+  voice?: {
+    fasterWhisper?: Partial<FasterWhisperRuntimeConfig>;
+    chatterbox?: Partial<ChatterboxRuntimeConfig>;
+    porcupine?: Partial<PorcupineRuntimeConfig>;
+  };
+  memory?: Partial<MemoryRuntimeConfig>;
 }
 
 export const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'data', 'config.json');
@@ -111,6 +124,72 @@ export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): RuntimeCon
 
     throw error;
   }
+}
+
+export async function updateConfig(
+  update: RuntimeConfigUpdate,
+  configPath: string = DEFAULT_CONFIG_PATH,
+): Promise<RuntimeConfig> {
+  const current = loadConfigFile(configPath);
+
+  if (!isRecord(current)) {
+    throw new Error(`Runtime config at ${configPath} must be a JSON object.`);
+  }
+
+  const next = applyRuntimeConfigUpdate(current, update);
+  const validated = validateConfig(next);
+
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+
+  return validated;
+}
+
+export function getDefaultConfigPath(): string {
+  return DEFAULT_CONFIG_PATH;
+}
+
+function applyRuntimeConfigUpdate(
+  current: Record<string, unknown>,
+  update: RuntimeConfigUpdate,
+): Record<string, unknown> {
+  const voice = isRecord(current.voice) ? current.voice : {};
+  const fasterWhisper = isRecord(voice.fasterWhisper) ? voice.fasterWhisper : {};
+  const chatterbox = isRecord(voice.chatterbox) ? voice.chatterbox : {};
+  const porcupine = isRecord(voice.porcupine) ? voice.porcupine : {};
+  const ollama = isRecord(current.ollama) ? current.ollama : {};
+  const memory = isRecord(current.memory) ? current.memory : {};
+
+  return {
+    ...current,
+    ollama: {
+      ...ollama,
+      ...update.ollama,
+    },
+    voice: {
+      ...voice,
+      fasterWhisper: {
+        ...fasterWhisper,
+        ...update.voice?.fasterWhisper,
+      },
+      chatterbox: {
+        ...chatterbox,
+        ...update.voice?.chatterbox,
+      },
+      porcupine: {
+        ...porcupine,
+        ...update.voice?.porcupine,
+      },
+    },
+    memory: {
+      ...memory,
+      ...update.memory,
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function toErrorMessage(error: unknown): string {

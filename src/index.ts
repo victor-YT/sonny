@@ -191,6 +191,7 @@ async function main(): Promise<void> {
   });
   const consoleServer = await startConsoleServer({
     gateway,
+    voiceManager: voiceGateway?.manager,
   });
 
   stdout.write(`[console] ${consoleServer.address.url}\n`);

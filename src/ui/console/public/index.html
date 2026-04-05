@@ -3,22 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sonny Localhost Control Panel</title>
+    <title>Sonny Localhost Console</title>
     <style>
       :root {
         color-scheme: dark;
         --bg: #071018;
-        --bg-elevated: rgba(11, 23, 34, 0.94);
-        --panel: rgba(14, 30, 44, 0.9);
-        --panel-border: rgba(118, 151, 176, 0.18);
-        --ink: #e8f2fb;
-        --muted: #90a7ba;
+        --bg-deep: #050b11;
+        --panel: rgba(10, 22, 33, 0.9);
+        --panel-strong: rgba(8, 18, 27, 0.96);
+        --panel-border: rgba(115, 146, 170, 0.2);
+        --ink: #eef6ff;
+        --muted: #95aabc;
         --accent: #57d0ff;
-        --accent-soft: rgba(87, 208, 255, 0.12);
+        --accent-soft: rgba(87, 208, 255, 0.14);
         --ok: #4de0a8;
-        --warn: #ff9c66;
-        --danger: #ff6a6a;
-        --shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+        --warn: #ffb266;
+        --danger: #ff7d7d;
+        --shadow: 0 22px 52px rgba(0, 0, 0, 0.34);
+        --radius: 24px;
       }
 
       * {
@@ -31,15 +33,70 @@
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(87, 208, 255, 0.14), transparent 28%),
-          radial-gradient(circle at top right, rgba(77, 224, 168, 0.1), transparent 22%),
-          linear-gradient(180deg, #08111b 0%, var(--bg) 100%);
+          radial-gradient(circle at top left, rgba(87, 208, 255, 0.16), transparent 24%),
+          radial-gradient(circle at top right, rgba(77, 224, 168, 0.1), transparent 18%),
+          linear-gradient(180deg, var(--bg-deep) 0%, var(--bg) 100%);
       }
 
       main {
-        max-width: 1280px;
+        max-width: 1440px;
         margin: 0 auto;
-        padding: 32px 20px 48px;
+        padding: 30px 18px 48px;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      input {
+        min-height: 42px;
+        border-radius: 14px;
+      }
+
+      button {
+        border: 1px solid rgba(87, 208, 255, 0.28);
+        background: linear-gradient(180deg, rgba(87, 208, 255, 0.18), rgba(87, 208, 255, 0.08));
+        color: var(--ink);
+        padding: 0 16px;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        border-color: rgba(149, 170, 188, 0.18);
+        background: rgba(149, 170, 188, 0.08);
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.65;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--panel-border);
+        background: rgba(6, 17, 26, 0.96);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 220px;
+        padding: 14px;
+        border-radius: 18px;
+        resize: vertical;
+        font: 0.94rem/1.55 "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+
+      input[type="range"] {
+        min-height: auto;
+      }
+
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
 
       .hero {
@@ -53,13 +110,13 @@
       .hero h1 {
         margin: 0;
         font-size: clamp(2rem, 4vw, 3.4rem);
-        letter-spacing: -0.05em;
         line-height: 0.92;
+        letter-spacing: -0.05em;
       }
 
       .hero p {
         margin: 12px 0 0;
-        max-width: 700px;
+        max-width: 760px;
         color: var(--muted);
       }
 
@@ -91,38 +148,6 @@
         box-shadow: 0 0 16px currentColor;
       }
 
-      button,
-      select,
-      textarea {
-        font: inherit;
-      }
-
-      button,
-      select {
-        min-height: 42px;
-        border-radius: 14px;
-      }
-
-      button {
-        border: 1px solid rgba(87, 208, 255, 0.26);
-        background: linear-gradient(180deg, rgba(87, 208, 255, 0.16), rgba(87, 208, 255, 0.08));
-        color: var(--ink);
-        padding: 0 16px;
-        cursor: pointer;
-      }
-
-      button.secondary {
-        border-color: rgba(144, 167, 186, 0.18);
-        background: rgba(144, 167, 186, 0.08);
-      }
-
-      select,
-      textarea {
-        border: 1px solid var(--panel-border);
-        background: rgba(6, 18, 28, 0.96);
-        color: var(--ink);
-      }
-
       .grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -132,18 +157,22 @@
       .panel {
         grid-column: span 12;
         padding: 18px;
-        border-radius: 22px;
+        border-radius: var(--radius);
         border: 1px solid var(--panel-border);
-        background: linear-gradient(180deg, var(--panel), var(--bg-elevated));
+        background: linear-gradient(180deg, var(--panel), var(--panel-strong));
         box-shadow: var(--shadow);
       }
 
-      .panel.wide {
-        grid-column: span 7;
+      .panel.span-8 {
+        grid-column: span 8;
       }
 
-      .panel.tall {
-        grid-column: span 5;
+      .panel.span-6 {
+        grid-column: span 6;
+      }
+
+      .panel.span-4 {
+        grid-column: span 4;
       }
 
       .panel-header {
@@ -174,11 +203,17 @@
         gap: 12px;
       }
 
+      .status-card,
+      .list-item,
+      .memory-card,
+      .debug-card {
+        border: 1px solid rgba(115, 146, 170, 0.16);
+        background: rgba(5, 15, 24, 0.72);
+        border-radius: 20px;
+      }
+
       .status-card {
         padding: 14px;
-        border-radius: 18px;
-        border: 1px solid rgba(118, 151, 176, 0.14);
-        background: rgba(6, 18, 28, 0.72);
       }
 
       .status-card dt {
@@ -192,53 +227,195 @@
         margin: 8px 0 0;
         font-size: 1rem;
         font-weight: 600;
+        word-break: break-word;
       }
 
+      .memory-grid,
       .stack,
-      .list {
+      .list,
+      .debug-grid {
         display: grid;
         gap: 12px;
       }
 
-      .memory-controls {
+      .memory-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .memory-card,
+      .debug-card {
+        padding: 16px;
+      }
+
+      .memory-card header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+        margin-bottom: 12px;
+      }
+
+      .memory-card h3,
+      .debug-card h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .memory-actions,
+      .form-actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
         align-items: center;
       }
 
-      textarea {
-        width: 100%;
-        min-height: 320px;
-        padding: 14px;
-        border-radius: 16px;
-        resize: vertical;
-        font: 0.95rem/1.5 "IBM Plex Mono", "SFMono-Regular", monospace;
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field label {
+        font-size: 0.84rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .field input[type="text"] {
+        padding: 0 12px;
+      }
+
+      .slider-row {
+        display: grid;
+        gap: 6px;
+      }
+
+      .slider-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.9rem;
+      }
+
+      .slider-head strong {
+        font-size: 0.92rem;
+      }
+
+      .slider-note {
+        color: var(--muted);
+        font-size: 0.9rem;
       }
 
       .list-item {
         padding: 14px;
-        border-radius: 18px;
-        border: 1px solid rgba(118, 151, 176, 0.14);
-        background: rgba(6, 18, 28, 0.72);
       }
 
-      .list-item strong {
-        display: block;
-        margin-bottom: 6px;
+      .timeline-entry {
+        display: grid;
+        gap: 8px;
       }
 
-      .list-item p {
+      .timeline-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+      }
+
+      .timeline-title {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .pill.user {
+        background: rgba(77, 224, 168, 0.12);
+        color: var(--ok);
+      }
+
+      .pill.assistant {
+        background: rgba(87, 208, 255, 0.12);
+        color: var(--accent);
+      }
+
+      .pill.system {
+        background: rgba(255, 178, 102, 0.14);
+        color: var(--warn);
+      }
+
+      .pill.tool {
+        background: rgba(255, 125, 125, 0.14);
+        color: var(--danger);
+      }
+
+      .timeline-meta {
+        color: var(--muted);
+        font-size: 0.85rem;
+        text-align: right;
+      }
+
+      .timeline-body {
         margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
-      code {
-        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      details {
+        border-top: 1px solid rgba(115, 146, 170, 0.16);
+        padding-top: 8px;
       }
 
-      @media (max-width: 980px) {
-        .panel.wide,
-        .panel.tall {
+      summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+
+      pre {
+        margin: 10px 0 0;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(4, 12, 18, 0.9);
+        color: #c8d8e6;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .path-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .path-list code {
+        display: block;
+        margin-top: 4px;
+        color: var(--ink);
+        word-break: break-all;
+      }
+
+      @media (max-width: 1120px) {
+        .panel.span-8,
+        .panel.span-6,
+        .panel.span-4 {
           grid-column: span 12;
         }
 
@@ -246,6 +423,13 @@
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
+        .memory-grid,
+        .field-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
         .hero {
           flex-direction: column;
         }
@@ -253,11 +437,18 @@
         .hero-actions {
           align-items: flex-start;
         }
-      }
 
-      @media (max-width: 640px) {
         .status-grid {
           grid-template-columns: 1fr;
+        }
+
+        .timeline-head {
+          grid-template-columns: 1fr;
+          display: grid;
+        }
+
+        .timeline-meta {
+          text-align: left;
         }
       }
     </style>
@@ -266,10 +457,10 @@
     <main>
       <section class="hero">
         <div>
-          <h1>Sonny<br />Control Panel</h1>
+          <h1>Sonny<br />Console Dashboard</h1>
           <p>
-            Localhost diagnostics for memory files, recent SQLite conversations,
-            registered skills, and live gateway runtime state.
+            Runtime diagnostics and writeable controls for memory, live session
+            history, personality tuning, and voice configuration.
           </p>
         </div>
         <div class="hero-actions">
@@ -281,7 +472,7 @@
       <section class="grid">
         <article class="panel">
           <div class="panel-header">
-            <h2>Runtime Status</h2>
+            <h2>Runtime Snapshot</h2>
             <span class="meta" id="status-updated">Waiting for first fetch</span>
           </div>
           <dl class="status-grid">
@@ -298,68 +489,157 @@
               <dd id="status-model">Unknown</dd>
             </div>
             <div class="status-card">
-              <dt>Voice</dt>
+              <dt>Voice Runtime</dt>
               <dd id="status-voice">Unknown</dd>
+            </div>
+            <div class="status-card">
+              <dt>Session Id</dt>
+              <dd id="status-session-id">Unknown</dd>
             </div>
             <div class="status-card">
               <dt>Memory Files</dt>
               <dd id="status-memory-count">0</dd>
             </div>
             <div class="status-card">
-              <dt>Recent Messages</dt>
+              <dt>Session Messages</dt>
               <dd id="status-conversation-count">0</dd>
             </div>
             <div class="status-card">
               <dt>Skills</dt>
               <dd id="status-skill-count">0</dd>
             </div>
-            <div class="status-card">
-              <dt>Memory Directory</dt>
-              <dd id="status-memory-directory"><code>Loading</code></dd>
-            </div>
           </dl>
         </article>
 
-        <article class="panel wide">
+        <article class="panel span-8">
           <div class="panel-header">
-            <h2>Memory</h2>
-            <span class="meta" id="memory-updated">No document loaded</span>
+            <h2>Memory Workspace</h2>
+            <span class="meta" id="memory-directory-label">Loading memory files</span>
           </div>
-          <div class="stack">
-            <div class="memory-controls">
-              <label for="memory-select">File</label>
-              <select id="memory-select"></select>
-              <button type="button" class="secondary" id="memory-reload-button">
-                Reload
-              </button>
-              <button type="button" id="memory-save-button">Save</button>
-            </div>
-            <textarea
-              id="memory-editor"
-              spellcheck="false"
-              aria-label="Memory document editor"
-            ></textarea>
-            <p class="hint" id="memory-path">Choose a memory document to inspect.</p>
+          <div class="memory-grid" id="memory-cards">
+            <p class="empty">No memory documents loaded yet.</p>
           </div>
         </article>
 
-        <article class="panel tall">
+        <article class="panel span-4">
           <div class="panel-header">
-            <h2>Skills</h2>
+            <h2>Debug Surfaces</h2>
+            <span class="meta" id="system-prompt-length">0 chars</span>
+          </div>
+          <div class="debug-grid">
+            <section class="debug-card">
+              <h3>Paths</h3>
+              <div class="path-list">
+                <div class="meta">
+                  Memory directory
+                  <code id="status-memory-directory">Loading</code>
+                </div>
+                <div class="meta">
+                  Runtime config
+                  <code id="config-path">Loading</code>
+                </div>
+                <div class="meta">
+                  Personality config
+                  <code id="personality-path">Loading</code>
+                </div>
+              </div>
+            </section>
+            <section class="debug-card">
+              <h3>System Prompt</h3>
+              <pre id="system-prompt-view">Loading...</pre>
+            </section>
+          </div>
+        </article>
+
+        <article class="panel span-6">
+          <div class="panel-header">
+            <h2>Personality</h2>
+            <span class="meta" id="personality-status">No personality data loaded</span>
+          </div>
+          <form class="stack" id="personality-form">
+            <div class="slider-row">
+              <div class="slider-head">
+                <strong>Verbosity</strong>
+                <span id="personality-verbosity-value">0%</span>
+              </div>
+              <input id="personality-verbosity" type="range" min="0" max="100" step="1" />
+              <div class="slider-note" id="personality-verbosity-note">Loading</div>
+            </div>
+            <div class="slider-row">
+              <div class="slider-head">
+                <strong>Assertiveness</strong>
+                <span id="personality-assertiveness-value">0%</span>
+              </div>
+              <input id="personality-assertiveness" type="range" min="0" max="100" step="1" />
+              <div class="slider-note" id="personality-assertiveness-note">Loading</div>
+            </div>
+            <div class="slider-row">
+              <div class="slider-head">
+                <strong>Humor</strong>
+                <span id="personality-humor-value">0%</span>
+              </div>
+              <input id="personality-humor" type="range" min="0" max="100" step="1" />
+              <div class="slider-note" id="personality-humor-note">Loading</div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="personality-save-button">Save Personality</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="panel span-6">
+          <div class="panel-header">
+            <h2>Voice Settings</h2>
+            <span class="meta" id="voice-status">No voice settings loaded</span>
+          </div>
+          <form class="stack" id="voice-settings-form">
+            <div class="field-grid">
+              <label class="field">
+                <span>Wake Word</span>
+                <input id="wake-word-input" type="text" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Voice Model</span>
+                <input id="voice-model-input" type="text" autocomplete="off" />
+              </label>
+            </div>
+            <div class="hint">
+              Wake word is written to runtime config. Voice model is written to
+              the personality voice field.
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="voice-save-button">Save Voice Settings</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="panel span-8">
+          <div class="panel-header">
+            <h2>Current Session Timeline</h2>
+            <span class="meta">Ordered oldest to newest for traceability</span>
+          </div>
+          <div class="list" id="current-session-list">
+            <p class="empty">No current session messages loaded yet.</p>
+          </div>
+        </article>
+
+        <article class="panel span-4">
+          <div class="panel-header">
+            <h2>Recent Activity</h2>
+            <span class="meta">Newest persisted messages first</span>
+          </div>
+          <div class="list" id="recent-history-list">
+            <p class="empty">No persisted history loaded yet.</p>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>Registered Skills</h2>
             <span class="meta" id="skills-directory">Waiting for gateway</span>
           </div>
           <div class="list" id="skills-list">
             <p class="empty">No skill data loaded yet.</p>
-          </div>
-        </article>
-
-        <article class="panel wide">
-          <div class="panel-header">
-            <h2>Recent Conversations</h2>
-            <span class="meta">Newest first</span>
-          </div>
-          <div class="list" id="conversations-list">
-            <p class="empty">No recent conversation data loaded yet.</p>
           </div>
         </article>
       </section>
