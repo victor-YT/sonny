@@ -287,6 +287,10 @@ export class VoiceGateway {
       return;
     }
 
+    if (await isServiceHealthy(config.healthUrl)) {
+      return;
+    }
+
     const processHandle = spawnManagedProcess({
       name: config.name,
       pythonCommand: this.pythonCommand,
@@ -720,6 +724,18 @@ async function stopManagedProcess(processHandle: ManagedProcessHandle): Promise<
   if (!settled) {
     processHandle.child.kill('SIGKILL');
     await once(processHandle.child, 'exit').catch(() => undefined);
+  }
+}
+
+async function isServiceHealthy(healthUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(healthUrl, {
+      signal: AbortSignal.timeout(2_000),
+    });
+
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
