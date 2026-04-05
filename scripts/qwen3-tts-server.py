@@ -257,6 +257,15 @@ class Qwen3TTSService:
         backend = self._ensure_backend()
         return backend.synthesize(request)
 
+    def synthesize_stream(self, request: SynthesizeRequest) -> Iterator[bytes]:
+        backend = self._ensure_backend()
+
+        if hasattr(backend, "synthesize_stream"):
+            return backend.synthesize_stream(request)
+
+        generated = backend.synthesize(request)
+        return iter_audio_chunks(generated.wav_bytes)
+
     def _ensure_backend(self):
         if self._backend is not None:
             return self._backend

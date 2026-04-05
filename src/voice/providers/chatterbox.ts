@@ -54,10 +54,18 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): AsyncIterable<Buffer> {
-    const response = await this.request(this.streamPath, text, options, true);
+    let response: Response;
+
+    try {
+      response = await this.request(this.streamPath, text, options, true);
+    } catch {
+      yield await this.synthesize(text, options);
+      return;
+    }
 
     if (!response.ok) {
-      throw new Error(await this.buildHttpError(response));
+      yield await this.synthesize(text, options);
+      return;
     }
 
     const contentType = response.headers.get('content-type') ?? '';
