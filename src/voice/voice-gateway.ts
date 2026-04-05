@@ -599,12 +599,18 @@ class PlaybackVadMonitor {
     this.source.on('data', (chunk: unknown) => {
       void this.handleChunk(chunk);
     });
+
+    this.source.on('error', (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[voice] recording error ignored:', message);
+      void this.stop();
+    });
   }
 
   public async stop(): Promise<void> {
     this.started = false;
     this.speechChunks = 0;
-    this.source?.removeAllListeners('data');
+    this.source?.removeAllListeners();
     this.source = undefined;
 
     try {
