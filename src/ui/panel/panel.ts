@@ -1,30 +1,46 @@
 const conversationElement = queryRequired<HTMLElement>('#conversation');
 const statusLabelElement = queryRequired<HTMLElement>('#status-label');
 const statusDotElement = queryRequired<HTMLElement>('#status-dot');
+const voiceToggleElement = queryRequired<HTMLButtonElement>('#voice-toggle');
 const composerFormElement = queryRequired<HTMLFormElement>('#composer-form');
 const composerInputElement = queryRequired<HTMLInputElement>('#composer-input');
 const composerButtonElement = queryRequired<HTMLButtonElement>('#composer-button');
-let pendingAssistantMessageElement: HTMLElement | undefined;
 
-console.log('[ui.panel] panel script loaded');
+let pendingAssistantMessageElement: HTMLElement | undefined;
+let typingIndicatorElement: HTMLElement | undefined;
 
 void initializePanel();
 
 async function initializePanel(): Promise<void> {
-  console.log('[ui.panel] initializePanel start');
   renderStatus(await window.sonny.getStatus());
   renderConversation(await window.sonny.listConversation());
-  console.log('[ui.panel] initial status and conversation rendered');
+  renderVoiceMode(await window.sonny.getVoiceMode());
 
   window.sonny.onStatusChanged((snapshot) => {
-    console.log(`[ui.panel] status changed status=${snapshot.status}`);
     renderStatus(snapshot);
   });
-  window.sonny.onToken((token) => {
+  window.sonny.onVoiceModeChanged((snapshot) => {
+    renderVoiceMode(snapshot);
+  });
+  window.sonny.onStreamToken((token) => {
     appendStreamToken(token);
   });
-  window.sonny.onStreamEnd((response) => {
-    finalizePendingAssistantMessage(response);
+
+  voiceToggleElement.addEventListener('click', async () => {
+    voiceToggleElement.disabled = true;
+
+    try {
+      renderVoiceMode(await window.sonny.toggleVoiceMode());
+    } finally {
+      voiceToggleElement.disabled = false;
+    }
+  });
+
+  composerInputElement.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.metaKey) {
+      event.preventDefault();
+      composerFormElement.requestSubmit();
+    }
   });
 
   composerFormElement.addEventListener('submit', async (event) => {
@@ -36,21 +52,17 @@ async function initializePanel(): Promise<void> {
       return;
     }
 
-    console.log(`[ui.panel] submit received messageLength=${message.length}`);
     composerButtonElement.disabled = true;
     composerInputElement.disabled = true;
 
     try {
-      console.log('[ui.panel] calling window.sonny.sendMessage');
-      appendMessage('user', message);
+      appendMessage('user', message, Date.now());
       composerInputElement.value = '';
-      pendingAssistantMessageElement = appendMessage('assistant', '');
+      showTypingIndicator();
+      pendingAssistantMessageElement = undefined;
       const response = await window.sonny.sendMessage(message);
-      console.log(
-        `[ui.panel] sendMessage resolved responseLength=${response.length}`,
-      );
+      finalizePendingAssistantMessage(response);
     } catch (error: unknown) {
-      console.error('[ui.panel] sendMessage failed', error);
       finalizePendingAssistantMessage(`Message failed: ${toErrorMessage(error)}`);
     } finally {
       composerButtonElement.disabled = false;
@@ -66,29 +78,62 @@ function renderStatus(snapshot: { status: string }): void {
   statusLabelElement.textContent = label;
   statusDotElement.style.background = getStatusColor(snapshot.status);
   statusDotElement.style.boxShadow = `0 0 0 6px ${getStatusGlow(snapshot.status)}`;
+
+  if (snapshot.status === 'thinking') {
+    showTypingIndicator();
+    return;
+  }
+
+  hideTypingIndicator();
+}
+
+function renderVoiceMode(snapshot: {
+  enabled: boolean;
+  available: boolean;
+}): void {
+  voiceToggleElement.classList.toggle('voice-toggle-enabled', snapshot.enabled);
+  voiceToggleElement.disabled = !snapshot.available;
+
+  if (!snapshot.available) {
+    voiceToggleElement.textContent = 'Voice N/A';
+    voiceToggleElement.title = 'Voice mode is unavailable in this session.';
+    return;
+  }
+
+  voiceToggleElement.textContent = snapshot.enabled ? 'Voice On' : 'Voice Off';
+  voiceToggleElement.title = snapshot.enabled
+    ? 'Disable voice mode'
+    : 'Enable voice mode';
 }
 
 function renderConversation(
-  conversation: Array<{ role: 'user' | 'assistant'; content: string }>,
+  conversation: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>,
 ): void {
   conversationElement.replaceChildren();
+  pendingAssistantMessageElement = undefined;
+  typingIndicatorElement = undefined;
 
   if (conversation.length === 0) {
     const emptyState = document.createElement('div');
     emptyState.className = 'empty';
-    emptyState.textContent = 'Recent conversation will appear here once Sonny has something worth remembering.';
+    emptyState.textContent =
+      'Recent conversation will appear here once Sonny has something worth remembering.';
     conversationElement.append(emptyState);
     return;
   }
 
   for (const entry of conversation) {
-    appendMessage(entry.role, entry.content);
+    appendMessage(entry.role, entry.content, entry.timestamp, false);
   }
+
+  scrollConversationToBottom(false);
 }
 
 function appendMessage(
   role: 'user' | 'assistant',
   content: string,
+  timestamp: number,
+  smooth = true,
 ): HTMLElement {
   const emptyState = conversationElement.querySelector('.empty');
 
@@ -99,32 +144,85 @@ function appendMessage(
   const messageElement = document.createElement('article');
   messageElement.className = `message message-${role}`;
   messageElement.textContent = content;
+  messageElement.dataset.timestamp = formatTimestamp(timestamp);
+  messageElement.title = formatTimestamp(timestamp);
 
+  hideTypingIndicator();
   conversationElement.append(messageElement);
-  conversationElement.scrollTop = conversationElement.scrollHeight;
+  scrollConversationToBottom(smooth);
 
   return messageElement;
 }
 
 function appendStreamToken(token: string): void {
   if (pendingAssistantMessageElement === undefined) {
-    pendingAssistantMessageElement = appendMessage('assistant', token);
+    pendingAssistantMessageElement = appendMessage('assistant', token, Date.now());
     return;
   }
 
   pendingAssistantMessageElement.textContent =
     (pendingAssistantMessageElement.textContent ?? '') + token;
-  conversationElement.scrollTop = conversationElement.scrollHeight;
+  scrollConversationToBottom(true);
 }
 
 function finalizePendingAssistantMessage(content: string): void {
   if (pendingAssistantMessageElement === undefined) {
-    pendingAssistantMessageElement = appendMessage('assistant', content);
+    pendingAssistantMessageElement = appendMessage('assistant', content, Date.now());
   } else {
     pendingAssistantMessageElement.textContent = content;
   }
 
   pendingAssistantMessageElement = undefined;
+  hideTypingIndicator();
+  scrollConversationToBottom(true);
+}
+
+function showTypingIndicator(): void {
+  if (typingIndicatorElement !== undefined) {
+    scrollConversationToBottom(true);
+    return;
+  }
+
+  const emptyState = conversationElement.querySelector('.empty');
+
+  if (emptyState !== null) {
+    emptyState.remove();
+  }
+
+  const indicator = document.createElement('div');
+  indicator.className = 'typing-indicator';
+  indicator.setAttribute('aria-label', 'Sonny is thinking');
+
+  for (let index = 0; index < 3; index += 1) {
+    const dot = document.createElement('span');
+    dot.className = 'typing-dot';
+    indicator.append(dot);
+  }
+
+  typingIndicatorElement = indicator;
+  conversationElement.append(indicator);
+  scrollConversationToBottom(true);
+}
+
+function hideTypingIndicator(): void {
+  typingIndicatorElement?.remove();
+  typingIndicatorElement = undefined;
+}
+
+function scrollConversationToBottom(smooth: boolean): void {
+  conversationElement.scrollTo({
+    top: conversationElement.scrollHeight,
+    behavior: smooth ? 'smooth' : 'auto',
+  });
+}
+
+function formatTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function getStatusColor(status: string): string {

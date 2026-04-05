@@ -1,7 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-console.log('[ui.preload] preload script loaded');
-
 export type UiStatus = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export interface UiStatusSnapshot {
@@ -15,72 +13,49 @@ export interface UiConversationEntry {
   timestamp: number;
 }
 
+export interface UiVoiceModeSnapshot {
+  enabled: boolean;
+  available: boolean;
+}
+
 export interface SonnyBridge {
   getStatus(): Promise<UiStatusSnapshot>;
   setStatus(status: UiStatus): Promise<UiStatusSnapshot>;
+  getVoiceMode(): Promise<UiVoiceModeSnapshot>;
+  toggleVoiceMode(): Promise<UiVoiceModeSnapshot>;
   listConversation(): Promise<UiConversationEntry[]>;
   sendMessage(message: string): Promise<string>;
   showCapsule(): Promise<void>;
   hideCapsule(): Promise<void>;
   togglePanel(): Promise<void>;
   onStatusChanged(listener: (snapshot: UiStatusSnapshot) => void): () => void;
-  onToken(listener: (token: string) => void): () => void;
-  onStreamEnd(listener: (response: string) => void): () => void;
+  onVoiceModeChanged(
+    listener: (snapshot: UiVoiceModeSnapshot) => void,
+  ): () => void;
   onStreamToken(listener: (token: string) => void): () => void;
 }
 
 const sonnyBridge: SonnyBridge = {
-  getStatus: async () => {
-    console.log('[ui.preload] invoking ui:get-status');
-    const snapshot = await ipcRenderer.invoke('ui:get-status');
-    console.log(`[ui.preload] ui:get-status resolved status=${snapshot.status}`);
-    return snapshot;
-  },
-  setStatus: async (status) => {
-    console.log(`[ui.preload] invoking ui:set-status status=${status}`);
-    const snapshot = await ipcRenderer.invoke('ui:set-status', status);
-    console.log(`[ui.preload] ui:set-status resolved status=${snapshot.status}`);
-    return snapshot;
-  },
-  listConversation: async () => {
-    console.log('[ui.preload] invoking gateway:list-conversation');
-    const conversation = await ipcRenderer.invoke('gateway:list-conversation');
-    console.log(
-      `[ui.preload] gateway:list-conversation resolved entries=${conversation.length}`,
-    );
-    return conversation;
-  },
-  sendMessage: async (message) => {
-    console.log(
-      `[ui.preload] invoking gateway:send-message messageLength=${message.length}`,
-    );
-    const response = await ipcRenderer.invoke('gateway:send-message', message);
-    console.log(
-      `[ui.preload] gateway:send-message resolved responseLength=${response.length}`,
-    );
-    return response;
-  },
+  getStatus: async () => ipcRenderer.invoke('ui:get-status'),
+  setStatus: async (status) => ipcRenderer.invoke('ui:set-status', status),
+  getVoiceMode: async () => ipcRenderer.invoke('ui:get-voice-mode'),
+  toggleVoiceMode: async () => ipcRenderer.invoke('ui:toggle-voice-mode'),
+  listConversation: async () => ipcRenderer.invoke('gateway:list-conversation'),
+  sendMessage: async (message) => ipcRenderer.invoke('gateway:send-message', message),
   showCapsule: async () => {
-    console.log('[ui.preload] invoking ui:show-capsule');
     await ipcRenderer.invoke('ui:show-capsule');
   },
   hideCapsule: async () => {
-    console.log('[ui.preload] invoking ui:hide-capsule');
     await ipcRenderer.invoke('ui:hide-capsule');
   },
   togglePanel: async () => {
-    console.log('[ui.preload] invoking ui:toggle-panel');
     await ipcRenderer.invoke('ui:toggle-panel');
   },
   onStatusChanged: (listener) => {
-    console.log('[ui.preload] registering ui:status-changed listener');
     const wrappedListener = (
       _event: Electron.IpcRendererEvent,
       snapshot: UiStatusSnapshot,
     ) => {
-      console.log(
-        `[ui.preload] ui:status-changed received status=${snapshot.status}`,
-      );
       listener(snapshot);
     };
 
@@ -90,44 +65,33 @@ const sonnyBridge: SonnyBridge = {
       ipcRenderer.removeListener('ui:status-changed', wrappedListener);
     };
   },
-  onToken: (listener) => {
-    console.log('[ui.preload] registering gateway:token listener');
+  onVoiceModeChanged: (listener) => {
+    const wrappedListener = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: UiVoiceModeSnapshot,
+    ) => {
+      listener(snapshot);
+    };
+
+    ipcRenderer.on('ui:voice-mode-changed', wrappedListener);
+
+    return () => {
+      ipcRenderer.removeListener('ui:voice-mode-changed', wrappedListener);
+    };
+  },
+  onStreamToken: (listener) => {
     const wrappedListener = (
       _event: Electron.IpcRendererEvent,
       token: string,
     ) => {
-      console.log(
-        `[ui.preload] gateway:token received tokenLength=${token.length}`,
-      );
       listener(token);
     };
 
-    ipcRenderer.on('gateway:token', wrappedListener);
+    ipcRenderer.on('gateway:stream-token', wrappedListener);
 
     return () => {
-      ipcRenderer.removeListener('gateway:token', wrappedListener);
+      ipcRenderer.removeListener('gateway:stream-token', wrappedListener);
     };
-  },
-  onStreamEnd: (listener) => {
-    console.log('[ui.preload] registering gateway:stream-end listener');
-    const wrappedListener = (
-      _event: Electron.IpcRendererEvent,
-      response: string,
-    ) => {
-      console.log(
-        `[ui.preload] gateway:stream-end received responseLength=${response.length}`,
-      );
-      listener(response);
-    };
-
-    ipcRenderer.on('gateway:stream-end', wrappedListener);
-
-    return () => {
-      ipcRenderer.removeListener('gateway:stream-end', wrappedListener);
-    };
-  },
-  onStreamToken: (listener) => {
-    return sonnyBridge.onToken(listener);
   },
 };
 

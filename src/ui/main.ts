@@ -35,6 +35,11 @@ export interface UiConversationEntry {
   timestamp: number;
 }
 
+export interface UiVoiceModeSnapshot {
+  enabled: boolean;
+  available: boolean;
+}
+
 export interface UiMainAppConfig {
   gateway?: Gateway;
 }
@@ -47,6 +52,10 @@ export class UiMainApp {
   private readonly conversation: UiConversationEntry[] = [];
   private menubarApp: Menubar | undefined;
   private status: UiMainStatusSnapshot;
+  private voiceMode: UiVoiceModeSnapshot = {
+    enabled: false,
+    available: false,
+  };
   private gateway: Gateway | undefined;
   private gatewayPromise: Promise<Gateway> | undefined;
   private boundVoiceManager: VoiceManager | undefined;
@@ -107,6 +116,8 @@ export class UiMainApp {
     this.stopping = true;
     ipcMain.removeHandler('ui:get-status');
     ipcMain.removeHandler('ui:set-status');
+    ipcMain.removeHandler('ui:get-voice-mode');
+    ipcMain.removeHandler('ui:toggle-voice-mode');
     ipcMain.removeHandler('ui:toggle-panel');
     ipcMain.removeHandler('ui:show-capsule');
     ipcMain.removeHandler('ui:hide-capsule');
@@ -131,7 +142,12 @@ export class UiMainApp {
     };
 
     this.boundVoiceManager = voiceManager;
+    this.voiceMode = {
+      enabled: voiceManager.isRunning,
+      available: true,
+    };
     voiceManager.onEvent(this.voiceManagerListener);
+    this.broadcastVoiceMode();
     void this.applyStatus(this.mapVoiceState(voiceManager.currentState));
   }
 
@@ -279,6 +295,8 @@ export class UiMainApp {
         return this.applyStatus(nextStatus);
       },
     );
+    ipcMain.handle('ui:get-voice-mode', async () => this.voiceMode);
+    ipcMain.handle('ui:toggle-voice-mode', async () => this.toggleVoiceMode());
     ipcMain.handle('ui:toggle-panel', async () => {
       const menubarApp = await this.start();
 
@@ -375,8 +393,15 @@ export class UiMainApp {
     this.menubarApp?.window?.webContents.send('ui:status-changed', this.status);
   }
 
+  private broadcastVoiceMode(): void {
+    this.menubarApp?.window?.webContents.send(
+      'ui:voice-mode-changed',
+      this.voiceMode,
+    );
+  }
+
   private broadcastStreamToken(token: string): void {
-    this.menubarApp?.window?.webContents.send('gateway:token', token);
+    this.menubarApp?.window?.webContents.send('gateway:stream-token', token);
   }
 
   private broadcastStreamEnd(response: string): void {
@@ -400,6 +425,11 @@ export class UiMainApp {
 
   private async handleVoiceManagerEvent(event: VoiceManagerEvent): Promise<void> {
     if (event.type === 'state_changed' && event.state !== undefined) {
+      this.voiceMode = {
+        enabled: this.boundVoiceManager?.isRunning === true,
+        available: this.boundVoiceManager !== undefined,
+      };
+      this.broadcastVoiceMode();
       await this.applyStatus(this.mapVoiceState(event.state));
       return;
     }
@@ -412,6 +442,39 @@ export class UiMainApp {
     if (event.type === 'response' && event.text !== undefined) {
       this.appendConversation('assistant', event.text);
     }
+  }
+
+  private async toggleVoiceMode(): Promise<UiVoiceModeSnapshot> {
+    const voiceManager = this.boundVoiceManager;
+
+    if (voiceManager === undefined) {
+      this.voiceMode = {
+        enabled: false,
+        available: false,
+      };
+      this.broadcastVoiceMode();
+      return this.voiceMode;
+    }
+
+    if (voiceManager.isRunning) {
+      await voiceManager.stop();
+      this.voiceMode = {
+        enabled: false,
+        available: true,
+      };
+      await this.applyStatus('idle');
+    } else {
+      await voiceManager.start();
+      this.voiceMode = {
+        enabled: true,
+        available: true,
+      };
+      await this.applyStatus(this.mapVoiceState(voiceManager.currentState));
+    }
+
+    this.broadcastVoiceMode();
+
+    return this.voiceMode;
   }
 
   private mapVoiceState(state: VoiceManagerState): UiMainStatusSnapshot['status'] {
