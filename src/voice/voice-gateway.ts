@@ -8,8 +8,9 @@ import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import type { Gateway } from '../core/gateway.js';
 import { StreamingAudioQueue } from './streaming-audio-queue.js';
 import { Microphone, type MicrophoneConfig } from './microphone.js';
+import { FasterWhisperProvider } from './providers/faster-whisper.js';
 import { PorcupineProvider } from './providers/porcupine.js';
-import type { SttOptions, SttProvider } from './providers/stt.js';
+import type { SttOptions, SttProvider, SttResult } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type { WakeWordProvider } from './providers/wake-word.js';
 import { Speaker, type SpeakerConfig } from './speaker.js';
@@ -152,7 +153,7 @@ export class VoiceGateway {
       wakeWordProvider:
         config.wakeWordProvider ??
         this.createWakeWordProvider(config, runtimeConfig, environmentConfig),
-      sttProvider: config.sttProvider,
+      sttProvider: this.createSttProvider(config, runtimeConfig),
       ttsProvider: config.ttsProvider,
       captureAudio: async () => this.microphone.capture(),
       defaultSttOptions: config.defaultSttOptions,
@@ -250,6 +251,54 @@ export class VoiceGateway {
         runtimeConfig?.voice.porcupine.url,
       keywords,
     });
+  }
+
+  private createSttProvider(
+    config: VoiceGatewayConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): SttProvider | undefined {
+    const baseProvider = config.sttProvider
+      ?? (runtimeConfig === undefined
+        ? undefined
+        : new FasterWhisperProvider({
+            baseUrl: runtimeConfig.voice.fasterWhisper.url,
+          }));
+
+    if (baseProvider === undefined) {
+      return undefined;
+    }
+
+    const instrumentedStreamTranscribe = baseProvider.streamTranscribe === undefined
+      ? undefined
+      : async function* (
+        audioStream: AsyncIterable<Buffer>,
+        options: SttOptions = {},
+      ): AsyncIterable<SttResult> {
+        options.timingTracker?.start('stt_transcription');
+
+        try {
+          for await (const result of baseProvider.streamTranscribe!(audioStream, options)) {
+            yield result;
+          }
+        } finally {
+          options.timingTracker?.end('stt_transcription');
+        }
+      };
+
+    return {
+      name: baseProvider.name,
+      supportsStreaming: baseProvider.supportsStreaming,
+      transcribe: async (audio: Buffer, options: SttOptions = {}) => {
+        options.timingTracker?.start('stt_transcription');
+
+        try {
+          return await baseProvider.transcribe(audio, options);
+        } finally {
+          options.timingTracker?.end('stt_transcription');
+        }
+      },
+      streamTranscribe: instrumentedStreamTranscribe,
+    };
   }
 
   private async startManagedServices(): Promise<void> {
@@ -353,8 +402,7 @@ export class VoiceGateway {
     } catch (error: unknown) {
       this.playbackVadMonitor = undefined;
       console.warn(
-        'Failed to start playback VAD monitor, speech interruption disabled for this playback:',
-        error instanceof Error ? error.message : error,
+        `[voice] failed to start playback VAD monitor: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -589,9 +637,7 @@ class PlaybackVadMonitor {
     try {
       this.source = this.recorder.stream();
     } catch {
-      console.warn(
-        'PlaybackVadMonitor: recording not ready, skipping VAD monitor.',
-      );
+      console.warn('[voice] playback VAD monitor recording not ready, skipping');
       await this.stop();
       return;
     }
@@ -602,7 +648,7 @@ class PlaybackVadMonitor {
 
     this.source.on('error', (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn('[voice] recording error ignored:', message);
+      console.warn(`[voice] playback VAD recording error ignored: ${message}`);
       void this.stop();
     });
   }
@@ -720,7 +766,7 @@ function spawnManagedProcess(config: {
   });
 
   stderr.on('line', (line) => {
-    process.stderr.write(`[voice:${config.name}] ${line}\n`);
+    process.stderr.write(`[voice] ${config.name}: ${line}\n`);
   });
 
   return {

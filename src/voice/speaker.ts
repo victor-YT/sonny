@@ -237,6 +237,7 @@ export class Speaker {
         }
 
         this.currentItem = item;
+        item.metadata?.timingTracker?.start('audio_playback');
         this.setState('playing');
         this.emit({
           type: 'playback_started',
@@ -244,13 +245,16 @@ export class Speaker {
           metadata: item.metadata,
         });
 
-        await this.playItem(item);
-
-        this.emit({
-          type: 'playback_completed',
-          itemId: item.id,
-          metadata: item.metadata,
-        });
+        try {
+          await this.playItem(item);
+        } finally {
+          item.metadata?.timingTracker?.end('audio_playback');
+          this.emit({
+            type: 'playback_completed',
+            itemId: item.id,
+            metadata: item.metadata,
+          });
+        }
       }
     } catch (error: unknown) {
       if (!this.stopping) {

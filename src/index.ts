@@ -1,21 +1,8 @@
-process.on('uncaughtException', (err) => {
-  if (err.message && err.message.includes('sox')) {
-    console.warn('[voice] sox error suppressed:', err.message);
-    return;
-  }
-  console.error('Uncaught exception:', err);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.warn('[voice] unhandled rejection suppressed:', reason);
-});
-
-import { once } from 'node:events';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
 import { loadConfig, type RuntimeConfig } from './core/config.js';
+import { toErrorMessage } from './core/logging.js';
 import { Gateway } from './core/gateway.js';
 import { MonitorScheduler } from './core/monitor-scheduler.js';
 import {
@@ -47,13 +34,13 @@ import { startConsoleServer } from './ui/console/server.js';
 const SYSTEM_PROMPT =
   'You are Sonny, a local-first assistant with TARS energy: concise, pragmatic, and mildly unimpressed by avoidable mistakes. Give direct answers, make clear recommendations, and keep the jokes dry enough to pass for diagnostics. Prefer useful action over ceremony. If a request is vague, pin it down fast and move.';
 
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
+process.on('uncaughtException', (error) => {
+  console.error(`[voice] uncaught exception: ${toErrorMessage(error)}`);
+});
 
-  return 'Unknown error';
-}
+process.on('unhandledRejection', (reason) => {
+  console.error(`[voice] unhandled rejection: ${toErrorMessage(reason)}`);
+});
 
 function readNotificationPreference(
   environment: NodeJS.ProcessEnv = process.env,
@@ -112,7 +99,7 @@ function createMonitoringRuntime(
     webMonitor,
     onError: (error, monitor) => {
       console.error(
-        `Monitor check failed for ${monitor.id}: ${toErrorMessage(error)}`,
+        `[voice] monitor check failed for ${monitor.id}: ${toErrorMessage(error)}`,
       );
     },
   });
@@ -162,12 +149,12 @@ async function runVoice(
     }
 
     if (event.type === 'transcription' && event.text !== undefined) {
-      stdout.write(`[heard] ${event.text}\n`);
+      stdout.write(`[voice] heard=${event.text}\n`);
       return;
     }
 
     if (event.type === 'response' && event.text !== undefined) {
-      stdout.write(`[sonny] ${event.text}\n`);
+      stdout.write(`[voice] response=${event.text}\n`);
       return;
     }
 
@@ -177,7 +164,7 @@ async function runVoice(
   });
 
   await voiceGateway.start();
-  stdout.write('Voice mode is listening. Press Enter to talk, type text for TTS chat, Ctrl+C to stop.\n');
+  stdout.write('[voice] listening. Press Enter to talk, type text for TTS chat, Ctrl+C to stop.\n');
 
   const rl = readline.createInterface({
     input: stdin,
@@ -205,15 +192,15 @@ async function runVoice(
       const trimmedInput = input.trim();
 
       if (trimmedInput.length === 0) {
-        stdout.write('[voice] Recording... (up to 5s)\n');
+        stdout.write('[voice] recording... (up to 5s)\n');
 
         try {
           const capture = await voiceGateway.microphone.capture();
           const result = await voiceGateway.manager.processCapture(capture);
-          stdout.write(`[heard] ${result.transcription}\n`);
-          stdout.write(`[sonny] ${result.response}\n`);
+          stdout.write(`[voice] heard=${result.transcription}\n`);
+          stdout.write(`[voice] response=${result.response}\n`);
         } catch (error: unknown) {
-          console.error(`Push-to-talk failed: ${toErrorMessage(error)}`);
+          console.error(`[voice] push-to-talk failed: ${toErrorMessage(error)}`);
         }
 
         continue;
@@ -226,9 +213,9 @@ async function runVoice(
 
       try {
         const response = await voiceGateway.manager.respondToText(trimmedInput);
-        stdout.write(`${response}\n`);
+        stdout.write(`[voice] response=${response}\n`);
       } catch (error: unknown) {
-        console.error(`Message failed: ${toErrorMessage(error)}`);
+        console.error(`[voice] message failed: ${toErrorMessage(error)}`);
       }
     }
   };
@@ -285,7 +272,7 @@ async function main(): Promise<void> {
       try {
         await gateway.finalizeSession();
       } catch (error: unknown) {
-        console.error(`Memory finalization failed: ${toErrorMessage(error)}`);
+        console.error(`[voice] memory finalization failed: ${toErrorMessage(error)}`);
       }
 
       proactiveOutputCleanup();
@@ -337,7 +324,7 @@ async function main(): Promise<void> {
         const response = await gateway.chat(trimmedInput);
         stdout.write(`${response}\n`);
       } catch (error: unknown) {
-        console.error(`Message failed: ${toErrorMessage(error)}`);
+        console.error(`[voice] message failed: ${toErrorMessage(error)}`);
       }
     }
   } finally {
@@ -348,7 +335,7 @@ async function main(): Promise<void> {
     try {
       await gateway.finalizeSession();
     } catch (error: unknown) {
-      console.error(`Memory finalization failed: ${toErrorMessage(error)}`);
+      console.error(`[voice] memory finalization failed: ${toErrorMessage(error)}`);
     }
 
     proactiveOutputCleanup();
@@ -358,7 +345,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(`Fatal error: ${toErrorMessage(error)}`);
+  console.error(`[voice] fatal error: ${toErrorMessage(error)}`);
   process.exit(1);
 });
 

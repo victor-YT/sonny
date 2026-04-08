@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import type { TimingTracker } from '../core/timing.js';
+
 export type StreamingAudioQueueEventType =
   | 'item_started'
   | 'chunk'
@@ -11,6 +13,7 @@ export type StreamingAudioQueueEventType =
 export interface StreamingAudioQueueItemMetadata {
   text?: string;
   voice?: string;
+  timingTracker?: TimingTracker;
 }
 
 export interface StreamingAudioQueueEvent {

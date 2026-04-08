@@ -1,3 +1,5 @@
+import type { TimingTracker } from '../../core/timing.js';
+
 export interface SttResult {
   text: string;
   language?: string;
@@ -27,4 +29,5 @@ export interface SttOptions {
   sampleRateHertz?: number;
   channels?: number;
   encoding?: 'wav' | 'pcm_s16le';
+  timingTracker?: TimingTracker;
 }

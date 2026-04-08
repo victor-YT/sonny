@@ -37,13 +37,19 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): Promise<Buffer> {
-    const response = await this.request(this.synthesizePath, text, options);
+    options.timingTracker?.start('tts_synthesis');
 
-    if (!response.ok) {
-      throw new Error(await this.buildHttpError(response));
+    try {
+      const response = await this.request(this.synthesizePath, text, options);
+
+      if (!response.ok) {
+        throw new Error(await this.buildHttpError(response));
+      }
+
+      return this.readAudioResponse(response);
+    } finally {
+      options.timingTracker?.end('tts_synthesis');
     }
-
-    return this.readAudioResponse(response);
   }
 
   public async *streamSynthesize(

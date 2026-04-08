@@ -1,3 +1,5 @@
+import type { TimingTracker } from '../../core/timing.js';
+
 export interface TtsProvider {
   readonly name: string;
   synthesize(text: string, options?: TtsOptions): Promise<Buffer>;
@@ -11,6 +13,7 @@ export interface TtsOptions {
   emotion?: TtsEmotion;
   exaggeration?: number;
   signal?: AbortSignal;
+  timingTracker?: TimingTracker;
 }
 
 export type TtsEmotion = 'neutral' | 'happy' | 'sad' | 'excited' | 'calm';

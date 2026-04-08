@@ -4,6 +4,7 @@ import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { TimingTracker } from '../core/timing.js';
 import type { VoiceCaptureResult } from './voice-manager.js';
 
 const DEFAULT_SAMPLE_RATE_HERTZ = 16_000;
@@ -43,28 +44,35 @@ export class Microphone {
   }
 
   public async capture(): Promise<VoiceCaptureResult> {
+    const timingTracker = new TimingTracker();
+    timingTracker.start('vad_detection');
+
     if (this.shouldUseFfmpeg()) {
-      const audioPromise = this.recordWithFfmpeg();
+      const audioPromise = this.recordWithFfmpeg(timingTracker);
 
       return {
         audioPromise,
+        timingTracker,
         sttOptions: {
           sampleRateHertz: this.sampleRateHertz,
           channels: this.channels,
+          timingTracker,
         },
       };
     }
 
     const audioStream = new BufferAsyncIterable();
-    const audioPromise = this.recordWithVad(audioStream);
+    const audioPromise = this.recordWithVad(audioStream, timingTracker);
 
     return {
       audioStream,
       audioPromise,
+      timingTracker,
       sttOptions: {
         sampleRateHertz: this.sampleRateHertz,
         channels: this.channels,
         encoding: 'pcm_s16le',
+        timingTracker,
       },
     };
   }
@@ -73,7 +81,7 @@ export class Microphone {
     return process.platform === 'darwin' && this.recordProgram === 'ffmpeg';
   }
 
-  private async recordWithFfmpeg(): Promise<Buffer> {
+  private async recordWithFfmpeg(timingTracker: TimingTracker): Promise<Buffer> {
     const input = await this.resolveMacOsAudioInput();
     const outputPath = join(tmpdir(), `sonny-mic-${randomUUID()}.wav`);
     const durationSeconds = Math.max(1, Math.ceil(this.maxCaptureMs / 1000));
@@ -87,8 +95,6 @@ export class Microphone {
       '-t', String(durationSeconds),
       outputPath,
     ];
-
-    console.warn(`[mic] ffmpeg command: ${this.recordProgram} ${args.join(' ')}`);
 
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
@@ -106,15 +112,10 @@ export class Microphone {
         return;
       }
 
-      const stderrChunks: Buffer[] = [];
+      const stderrLines: string[] = [];
 
       child.stderr?.on('data', (data: Buffer) => {
-        stderrChunks.push(data);
-        const message = data.toString().trim();
-
-        if (message.length > 0) {
-          console.warn('[mic] ffmpeg:', message);
-        }
+        appendLogLines(stderrLines, data.toString('utf8'));
       });
 
       child.on('error', async (err: Error) => {
@@ -126,14 +127,13 @@ export class Microphone {
         if (code !== null && code !== 0) {
           await this.cleanupFile(outputPath);
           reject(new Error(
-            `ffmpeg exited with code ${code}: ${Buffer.concat(stderrChunks).toString('utf8').trim()}`,
+            `ffmpeg exited with code ${code}: ${stderrLines.join(' | ') || 'unknown error'}`,
           ));
           return;
         }
 
         try {
           const fileStat = await stat(outputPath);
-          console.warn(`[mic] ffmpeg recorded file size: ${fileStat.size} bytes (${outputPath})`);
 
           if (fileStat.size <= 0) {
             throw new Error('[mic] ffmpeg recorded an empty audio file');
@@ -141,6 +141,7 @@ export class Microphone {
 
           const wav = await readFile(outputPath);
           const validated = this.finalizeRecordedWav(wav, 'ffmpeg');
+          timingTracker.end('vad_detection');
           resolve(validated);
         } catch (error: unknown) {
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -151,7 +152,10 @@ export class Microphone {
     });
   }
 
-  private recordWithVad(audioStream: BufferAsyncIterable): Promise<Buffer> {
+  private recordWithVad(
+    audioStream: BufferAsyncIterable,
+    timingTracker: TimingTracker,
+  ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
 
@@ -180,6 +184,7 @@ export class Microphone {
         child,
         audioStream,
         sourceName: 'sox',
+        timingTracker,
         resolve,
         reject,
       });
@@ -190,6 +195,7 @@ export class Microphone {
     child: ChildProcess;
     audioStream: BufferAsyncIterable;
     sourceName: string;
+    timingTracker: TimingTracker;
     resolve: (value: Buffer) => void;
     reject: (reason?: unknown) => void;
   }): void {
@@ -197,6 +203,7 @@ export class Microphone {
       child,
       audioStream,
       sourceName,
+      timingTracker,
       resolve,
       reject,
     } = config;
@@ -240,6 +247,7 @@ export class Microphone {
       try {
         audioStream.end();
         const wav = this.finalizeCapture(Buffer.concat(allChunks), sourceName);
+        timingTracker.end('vad_detection');
         killChild();
         finish(wav);
       } catch (error: unknown) {
@@ -250,7 +258,7 @@ export class Microphone {
 
     const maxTimeout = setTimeout(() => {
       if (!settled) {
-        console.warn('[mic] max capture timeout reached, stopping.');
+        console.warn('[mic] max capture timeout reached, stopping capture');
         stopRecording();
       }
     }, this.maxCaptureMs + 1000);
@@ -287,7 +295,6 @@ export class Microphone {
           silenceMs += DEFAULT_VAD_POLL_MS;
 
           if (silenceMs >= DEFAULT_SILENCE_THRESHOLD_MS) {
-            console.warn('[mic] silence detected after speech, stopping.');
             stopRecording();
           }
         }
@@ -318,16 +325,20 @@ export class Microphone {
       });
 
       child.stdout.on('error', (err: Error) => {
-        console.warn(`[mic] ${sourceName} stdout error:`, err.message);
+        console.warn(`[mic] ${sourceName} stdout error: ${err.message}`);
       });
     }
 
     if (child.stderr !== null) {
-      child.stderr.on('data', (data: Buffer) => {
-        const message = data.toString().trim();
+      const stderrLines: string[] = [];
 
-        if (message.length > 0) {
-          console.warn(`[mic] ${sourceName}:`, message);
+      child.stderr.on('data', (data: Buffer) => {
+        appendLogLines(stderrLines, data.toString('utf8'));
+      });
+
+      child.on('close', (code: number | null) => {
+        if (!settled && code !== null && code !== 0 && stderrLines.length > 0) {
+          console.warn(`[mic] ${sourceName} exited with stderr: ${stderrLines.join(' | ')}`);
         }
       });
     }
@@ -360,7 +371,7 @@ export class Microphone {
       }
 
       if (code !== null && code !== 0) {
-        console.warn(`[mic] ${sourceName} exited with code ${code}, returning captured audio.`);
+        console.warn(`[mic] ${sourceName} exited with code ${code}, returning captured audio`);
       }
 
       finish(wav);
@@ -404,7 +415,6 @@ export class Microphone {
     const selected = this.pickPreferredMacOsDevice(devices);
 
     if (selected !== undefined) {
-      console.warn(`[mic] using macOS audio input [${selected.index}] ${selected.name}`);
       return `:${selected.index}`;
     }
 
@@ -490,6 +500,22 @@ export class Microphone {
     header.writeUInt32LE(pcm.length, 40);
 
     return Buffer.concat([header, pcm]);
+  }
+}
+
+function appendLogLines(lines: string[], raw: string): void {
+  for (const line of raw.split(/\r?\n/u)) {
+    const normalized = line.trim();
+
+    if (normalized.length === 0) {
+      continue;
+    }
+
+    lines.push(normalized);
+
+    if (lines.length > 10) {
+      lines.shift();
+    }
   }
 }
 

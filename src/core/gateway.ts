@@ -5,6 +5,7 @@ import {
 } from './context-manager.js';
 import {
   ConversationHistory,
+  type PersistedConversationMessage,
   type ConversationHistoryConfig,
 } from './conversation-history.js';
 import type {
@@ -23,9 +24,9 @@ import {
   SkillRegistry,
   type SkillRegistryConfig,
 } from '../skills/skill-registry.js';
-import { loadPersonalityConfig } from './personality.js';
 import { PromptBuilder } from './prompt-builder.js';
 import { Session, type SessionConfig } from './session.js';
+import type { TimingTracker } from './timing.js';
 import { ToolRouter } from './tool-router.js';
 
 export interface GatewayConfig {
@@ -87,9 +88,7 @@ export class Gateway {
       });
     this.promptBuilder =
       config.promptBuilder ??
-      new PromptBuilder({
-        personality: loadPersonalityConfig(),
-      });
+      new PromptBuilder();
     this.skillRegistry =
       config.skillRegistry ??
       new SkillRegistry(this.createSkillRegistryConfig(config, this.runtimeConfig));
@@ -111,6 +110,24 @@ export class Gateway {
 
   public get skills(): SkillRegistry {
     return this.skillRegistry;
+  }
+
+  public get providerName(): string {
+    return this.llmProvider.name;
+  }
+
+  public get currentModel(): string | null {
+    return this.runtimeConfig?.ollama.model ?? readStringProperty(this.llmProvider, 'model');
+  }
+
+  public get currentRuntimeConfig(): RuntimeConfig | undefined {
+    return this.runtimeConfig;
+  }
+
+  public listRecentConversationMessages(
+    limit = 50,
+  ): PersistedConversationMessage[] {
+    return this.conversationHistory.listRecentMessages(limit);
   }
 
   public onProactiveNotification(
@@ -167,6 +184,7 @@ export class Gateway {
     userMessage: string,
     options: {
       signal?: AbortSignal;
+      timingTracker?: TimingTracker;
     } = {},
   ): AsyncIterable<LlmStreamChunk> {
     const baseSystemPrompt = await this.buildSystemPrompt(userMessage);
@@ -183,6 +201,10 @@ export class Gateway {
     });
 
     let assistantContent = '';
+    let firstTokenRecorded = false;
+
+    options.timingTracker?.start('llm_first_token');
+    options.timingTracker?.start('llm_full_response');
 
     for await (const chunk of this.llmProvider.stream(contextWindow.messages, {
       tools: this.toolRouter.getDefinitions(),
@@ -190,11 +212,22 @@ export class Gateway {
       signal: options.signal,
     })) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
+        if (!firstTokenRecorded) {
+          firstTokenRecorded = true;
+          options.timingTracker?.end('llm_first_token');
+        }
+
         assistantContent += chunk.text;
       }
 
       yield chunk;
     }
+
+    if (!firstTokenRecorded) {
+      options.timingTracker?.end('llm_first_token');
+    }
+
+    options.timingTracker?.end('llm_full_response');
 
     const assistantEntry: LlmMessage = {
       role: 'assistant',
@@ -359,6 +392,19 @@ export class Gateway {
       await listener(notification);
     }
   }
+}
+
+function readStringProperty(
+  value: unknown,
+  propertyName: string,
+): string | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const property = Reflect.get(value, propertyName);
+
+  return typeof property === 'string' && property.length > 0 ? property : null;
 }
 
 function formatProactiveNotification(
