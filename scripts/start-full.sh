@@ -72,4 +72,4 @@ wait_for_health "qwen3-tts" "${TTS_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
 wait_for_health "vad" "${VAD_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
 
 cd "${PROJECT_ROOT}"
-exec pnpm start
+exec pnpm start:electron

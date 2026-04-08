@@ -9,7 +9,7 @@
     "test:integration": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js",
     "build": "tsc && tsc -p tsconfig.preload.json && pnpm run build:assets",
     "build:assets": "node dev/build-assets.cjs",
-    "dev": "tsc --watch",
+    "dev": "pnpm build && bash ./scripts/start-full.sh",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "start:services": "./scripts/start-services.sh",
