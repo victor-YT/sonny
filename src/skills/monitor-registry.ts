@@ -4,13 +4,9 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-const DEFAULT_MONITOR_REGISTRY_PATH = join(
-  process.cwd(),
-  'data',
-  'monitors.json',
-);
+import { DEFAULT_MONITOR_REGISTRY_PATH } from '../core/paths.js';
 
 export interface MonitorDefinition {
   id: string;

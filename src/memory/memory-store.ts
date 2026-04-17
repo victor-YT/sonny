@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { DEFAULT_MEMORY_DIRECTORY } from '../core/paths.js';
+
 export const MEMORY_DOCUMENT_NAMES = [
   'facts',
   'preferences',
@@ -27,8 +29,6 @@ export interface MemoryStoreConfig {
   directoryPath?: string;
   clock?: () => Date;
 }
-
-const DEFAULT_MEMORY_DIRECTORY = join(process.cwd(), 'data', 'memory');
 
 export class MemoryStore {
   private readonly directoryPath: string;

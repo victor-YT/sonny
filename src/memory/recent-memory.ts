@@ -1,15 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
+import { DEFAULT_RECENT_MEMORY_PATH } from '../core/paths.js';
 import type { LlmMessage } from '../core/providers/llm.js';
 
 const DEFAULT_RETENTION_DAYS = 7;
-const DEFAULT_DATABASE_PATH = join(
-  process.cwd(),
-  'data',
-  'memory',
-  'recent.json',
-);
+const DEFAULT_DATABASE_PATH = DEFAULT_RECENT_MEMORY_PATH;
 const DEFAULT_QUERY_LIMIT = 50;
 
 interface RecentMemoryRow {

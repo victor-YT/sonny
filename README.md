@@ -91,18 +91,18 @@ Fast path:
 ./scripts/install.sh
 ```
 
-That script verifies macOS/Homebrew, installs missing packages, runs `pnpm install`, creates the expected `data/` layout, copies `.env.example` to `.env` if needed, and pulls the default Ollama model.
+That script verifies macOS/Homebrew, installs missing packages, runs `pnpm install`, creates the expected `.local/` runtime layout, copies `.env.example` to `.env` if needed, and pulls the default Ollama model.
 
 Manual setup:
 
 ```bash
 pnpm install
 cp .env.example .env
-mkdir -p data/memory
-touch data/memory/facts.md data/memory/preferences.md data/memory/goals.md data/memory/patterns.md
+mkdir -p .local/memory
+touch .local/memory/facts.md .local/memory/preferences.md .local/memory/goals.md .local/memory/patterns.md
 ```
 
-Make sure `data/monitors.json` exists:
+Make sure `.local/monitors.json` exists:
 
 ```json
 {
@@ -119,7 +119,7 @@ ollama pull qwen3:8b
 
 ### Environment Configuration
 
-Sonny reads startup values from `.env` and longer-lived runtime settings from `data/config.json`.
+Sonny reads startup values from `.env`, tracked default settings from `config/config.json`, and local runtime state from `.local/`.
 
 The default `.env.example` contains:
 
@@ -142,7 +142,7 @@ Important values:
 - `CHATTERBOX_URL`: TTS service URL
 - `SONNY_VOICE_MODE`: `0`/`false` for text mode, `1`/`true` for voice mode
 
-`data/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and use `data/config.json` for app behavior.
+`config/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and `.local/` for machine-local runtime data.
 
 ### Python Services Setup
 
@@ -308,7 +308,7 @@ Sonny uses a three-part memory model.
 
 ### 1. Long-term memory
 
-Long-term memory is stored as Markdown files in `data/memory/`:
+Long-term memory is stored as Markdown files in `.local/memory/`:
 
 - `facts.md`
 - `preferences.md`
@@ -319,7 +319,7 @@ These are intended to capture durable information about the user, not every tran
 
 ### 2. Recent memory
 
-Recent interactions are stored in `data/memory/recent.json`.
+Recent interactions are stored in `.local/memory/recent.json`.
 
 This gives Sonny short-horizon recall for the last several days without polluting long-term memory with temporary details.
 
@@ -362,12 +362,12 @@ Current built-in skills include:
 
 There are also runtime subsystems around monitoring:
 
-- `MonitorRegistry` persists watch targets in `data/monitors.json`
+- `MonitorRegistry` persists watch targets in `.local/monitors.json`
 - `WebMonitor` polls enabled URLs and emits proactive notifications when content changes
 
 ### Permission model
 
-Skill permissions are defined in `data/config.json` with:
+Skill permissions are defined in `config/config.json` with:
 
 - `enabled`
 - `defaultLevel`
@@ -390,7 +390,7 @@ The current install path is:
 1. Add the skill implementation under `src/skills/`.
 2. Make it expose a `ToolDefinition` and `execute(args)` method compatible with the built-in skill interface.
 3. Register it in `SkillRegistry`.
-4. Add permission settings for the tool in `data/config.json`.
+4. Add permission settings for the tool in `config/config.json`.
 5. Build again with `pnpm build`.
 
 A minimal workflow looks like this:
@@ -400,7 +400,7 @@ src/skills/my-skill.ts
   -> implement BuiltInSkill
 src/skills/skill-registry.ts
   -> register new MySkill()
-data/config.json
+config/config.json
   -> add skills.permissions.my.skill
 ```
 

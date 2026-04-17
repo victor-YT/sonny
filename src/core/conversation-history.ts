@@ -1,14 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
 import type { LlmMessage } from './providers/llm.js';
+import { DEFAULT_CONVERSATION_HISTORY_PATH } from './paths.js';
 
-const DEFAULT_DATABASE_PATH = join(
-  process.cwd(),
-  'data',
-  'memory',
-  'conversations.json',
-);
+const DEFAULT_DATABASE_PATH = DEFAULT_CONVERSATION_HISTORY_PATH;
 const DEFAULT_MAX_IN_MEMORY_MESSAGES = 500;
 
 interface ConversationHistoryRow {

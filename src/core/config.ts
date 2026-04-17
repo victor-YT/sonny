@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 import type { PermissionLevel } from '../skills/permissions.js';
 import { ConfigValidationError, validateConfig } from './config-validator.js';
+import { DEFAULT_CONFIG_PATH } from './paths.js';
 
 export type RuntimePlatform = NodeJS.Platform;
 
@@ -65,7 +66,6 @@ export interface RuntimeConfigUpdate {
   memory?: Partial<MemoryRuntimeConfig>;
 }
 
-export const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'data', 'config.json');
 export const DEFAULT_RUNTIME_PLATFORM: RuntimePlatform = process.platform;
 
 export function detectRuntimePlatform(

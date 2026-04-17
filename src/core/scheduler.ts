@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { DEFAULT_SCHEDULES_PATH } from './paths.js';
 
 export interface ScheduledTaskDefinition {
   id: string;
@@ -46,7 +47,6 @@ interface CronExpression {
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 30_000;
-const DEFAULT_SCHEDULES_PATH = join(process.cwd(), 'data', 'schedules.json');
 const MINUTE_ALIASES = new Map<string, number>();
 const HOUR_ALIASES = new Map<string, number>();
 const MONTH_ALIASES = new Map<string, number>([

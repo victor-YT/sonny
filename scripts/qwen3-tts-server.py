@@ -205,6 +205,21 @@ async def health() -> dict[str, str]:
     }
 
 
+@app.post("/warmup")
+async def warmup() -> dict[str, str]:
+    try:
+        await asyncio.to_thread(service.ensure_model)
+    except Exception as error:
+        LOGGER.exception("Warmup failed")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    return {
+        "status": "ok",
+        "warmed": "true",
+        "model": DEFAULT_MODEL_ID,
+    }
+
+
 @app.post("/synthesize")
 async def synthesize(request: SynthesizeRequest) -> Response:
     try:

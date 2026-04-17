@@ -6,6 +6,10 @@ import type { Menubar } from 'menubar';
 
 import type { Gateway } from '../core/gateway.js';
 import type { LlmMessage } from '../core/providers/llm.js';
+import type {
+  RuntimeStateStore,
+  SonnyRuntimeState,
+} from '../core/runtime-state.js';
 import type { VoiceManager, VoiceManagerEvent, VoiceManagerState } from '../voice/voice-manager.js';
 import { CapsuleWindow } from './capsule.js';
 import { TrayController } from './tray.js';
@@ -42,6 +46,7 @@ export interface UiVoiceModeSnapshot {
 
 export interface UiMainAppConfig {
   gateway?: Gateway;
+  runtimeState?: Pick<RuntimeStateStore, 'getSnapshot' | 'subscribe'>;
 }
 
 export class UiMainApp {
@@ -57,11 +62,13 @@ export class UiMainApp {
     available: false,
   };
   private gateway: Gateway | undefined;
+  private readonly runtimeState: UiMainAppConfig['runtimeState'];
   private gatewayPromise: Promise<Gateway> | undefined;
   private boundVoiceManager: VoiceManager | undefined;
   private voiceManagerListener:
     | ((event: VoiceManagerEvent) => void)
     | undefined;
+  private runtimeStateDetach: (() => void) | undefined;
   private stopping = false;
   private ipcRegistered = false;
 
@@ -69,14 +76,12 @@ export class UiMainApp {
     this.preloadPath = join(__dirname, 'preload.js');
     this.panelUrl = this.resolvePanelUrl();
     this.gateway = config.gateway;
+    this.runtimeState = config.runtimeState;
     this.trayController = new TrayController({
       tooltip: TOOLTIP,
     });
     this.capsuleWindow = new CapsuleWindow();
-    this.status = {
-      status: 'idle',
-      lastUpdatedAt: Date.now(),
-    };
+    this.status = this.toInitialStatus();
   }
 
   public async start(): Promise<Menubar> {
@@ -99,6 +104,7 @@ export class UiMainApp {
       this.registerIpc();
       this.menubarApp = await this.createMenubar();
       console.log('[ui.main] menubar instance created');
+      this.attachRuntimeState();
       void this.initializeGateway();
 
       return this.menubarApp;
@@ -123,6 +129,7 @@ export class UiMainApp {
     ipcMain.removeHandler('ui:hide-capsule');
     ipcMain.removeHandler('gateway:list-conversation');
     ipcMain.removeHandler('gateway:send-message');
+    this.runtimeStateDetach?.();
     this.capsuleWindow.destroy();
     this.gateway?.close();
 
@@ -308,7 +315,8 @@ export class UiMainApp {
       await menubarApp.showWindow();
     });
     ipcMain.handle('ui:show-capsule', async () => {
-      this.capsuleWindow.show();
+      // Temporary: keep the top-center capsule overlay disabled during manual voice validation.
+      this.capsuleWindow.hide();
     });
     ipcMain.handle('ui:hide-capsule', async () => {
       this.capsuleWindow.hide();
@@ -376,13 +384,9 @@ export class UiMainApp {
     };
 
     this.trayController.setStatus(nextStatus);
-    await this.capsuleWindow.setStatus(nextStatus);
-
-    if (nextStatus === 'idle') {
-      this.capsuleWindow.hide();
-    } else {
-      this.capsuleWindow.show();
-    }
+    // Temporary: disable the top-center capsule overlay without changing the rest of the UI state flow.
+    // await this.capsuleWindow.setStatus(nextStatus);
+    this.capsuleWindow.hide();
 
     this.broadcastStatus();
 
@@ -497,6 +501,53 @@ export class UiMainApp {
       default:
         return 'idle';
     }
+  }
+
+  private mapRuntimeState(state: SonnyRuntimeState): UiMainStatusSnapshot['status'] {
+    switch (state) {
+      case 'listening':
+      case 'wake_detected':
+      case 'transcribing':
+        return 'listening';
+      case 'thinking':
+        return 'thinking';
+      case 'speaking':
+        return 'speaking';
+      case 'idle':
+      case 'error':
+      default:
+        return 'idle';
+    }
+  }
+
+  private toInitialStatus(): UiMainStatusSnapshot {
+    const snapshot = this.runtimeState?.getSnapshot();
+
+    if (snapshot === undefined) {
+      return {
+        status: 'idle',
+        lastUpdatedAt: Date.now(),
+      };
+    }
+
+    return {
+      status: this.mapRuntimeState(snapshot.currentState),
+      lastUpdatedAt: Date.parse(snapshot.updatedAt) || Date.now(),
+    };
+  }
+
+  private attachRuntimeState(): void {
+    if (this.runtimeState === undefined || this.runtimeStateDetach !== undefined) {
+      return;
+    }
+
+    this.runtimeStateDetach = this.runtimeState.subscribe((event) => {
+      if (event.type !== 'snapshot') {
+        return;
+      }
+
+      void this.applyStatus(this.mapRuntimeState(event.snapshot.currentState));
+    });
   }
 
   private toConversationEntry(

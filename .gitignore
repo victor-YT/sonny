@@ -1,15 +1,21 @@
 node_modules/
 dist/
+dist-test/
 release/
+.local/
 .env
+.env.*
+!.env.example
 *.log
-
-# for dev
-dev/
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
+venv/
 
 .idea/
 *.tsbuildinfo
-data/memory/
-data/memory/*.sqlite
-
-dist-test/

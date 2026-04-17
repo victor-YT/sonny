@@ -31,7 +31,9 @@ export class ResponseProcessor {
   }
 
   public process(text: string): ProcessedVoiceResponse {
-    const plainText = this.stripMarkdown(text);
+    const plainText = this.normalizeVoicePronunciation(
+      this.stripMarkdown(text),
+    );
     const emotion = this.emotionTagger.analyze(plainText);
     const sentences = this.toProcessedSentences(plainText, emotion);
 
@@ -186,5 +188,13 @@ export class ResponseProcessor {
       .replace(/\s+/gu, ' ')
       .replace(/\s+([,.;!?])/gu, '$1')
       .trim();
+  }
+
+  private normalizeVoicePronunciation(text: string): string {
+    if (!/[\u3400-\u9fff]/u.test(text)) {
+      return text;
+    }
+
+    return text.replace(/\bsonny\b/giu, '桑尼');
   }
 }

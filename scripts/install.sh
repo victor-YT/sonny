@@ -61,34 +61,21 @@ install_node_dependencies() {
   (cd "${ROOT_DIR}" && pnpm install)
 }
 
-create_data_layout() {
-  log 'Creating Sonny data directories and placeholder files.'
+create_runtime_layout() {
+  log 'Creating Sonny local runtime directories and placeholder files.'
 
-  mkdir -p "${ROOT_DIR}/data/memory"
+  mkdir -p "${ROOT_DIR}/.local/memory"
 
   touch \
-    "${ROOT_DIR}/data/memory/facts.md" \
-    "${ROOT_DIR}/data/memory/goals.md" \
-    "${ROOT_DIR}/data/memory/patterns.md" \
-    "${ROOT_DIR}/data/memory/preferences.md"
+    "${ROOT_DIR}/.local/memory/facts.md" \
+    "${ROOT_DIR}/.local/memory/goals.md" \
+    "${ROOT_DIR}/.local/memory/patterns.md" \
+    "${ROOT_DIR}/.local/memory/preferences.md"
 
-  if [ ! -f "${ROOT_DIR}/data/monitors.json" ]; then
-    cat <<'EOF' > "${ROOT_DIR}/data/monitors.json"
+  if [ ! -f "${ROOT_DIR}/.local/monitors.json" ]; then
+    cat <<'EOF' > "${ROOT_DIR}/.local/monitors.json"
 {
   "monitors": []
-}
-EOF
-  fi
-
-  if [ ! -f "${ROOT_DIR}/data/personality.json" ]; then
-    cat <<'EOF' > "${ROOT_DIR}/data/personality.json"
-{
-  "name": "Sonny",
-  "voice": "Local-first, concise, pragmatic, and mildly unimpressed by avoidable mistakes.",
-  "verbosity": "Keep answers tight by default. Expand only when the user asks or the task genuinely needs it.",
-  "assertiveness": "Make clear recommendations, challenge weak assumptions, and prefer action over ceremony.",
-  "humor": "Dry, light, and sparing. Jokes should read like diagnostics, not a comedy routine.",
-  "interruption_policy": "If the request is vague, pin down the missing constraint fast and keep moving. Do not derail a clear task with unnecessary questions."
 }
 EOF
   fi
@@ -141,7 +128,7 @@ main() {
 
   install_missing_formulae
   install_node_dependencies
-  create_data_layout
+  create_runtime_layout
   copy_env_file
   pull_default_model
 

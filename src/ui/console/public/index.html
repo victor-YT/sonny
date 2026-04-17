@@ -3,24 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sonny Localhost Console</title>
+    <title>Sonny Voice Control Center</title>
     <style>
       :root {
         color-scheme: dark;
-        --bg: #071018;
-        --bg-deep: #050b11;
-        --panel: rgba(10, 22, 33, 0.9);
-        --panel-strong: rgba(8, 18, 27, 0.96);
-        --panel-border: rgba(115, 146, 170, 0.2);
-        --ink: #eef6ff;
-        --muted: #95aabc;
-        --accent: #57d0ff;
-        --accent-soft: rgba(87, 208, 255, 0.14);
-        --ok: #4de0a8;
-        --warn: #ffb266;
-        --danger: #ff7d7d;
-        --shadow: 0 22px 52px rgba(0, 0, 0, 0.34);
-        --radius: 24px;
+        --bg: #0a1015;
+        --panel: #111a21;
+        --panel-border: #24313d;
+        --text: #e8f0f7;
+        --muted: #93a3b1;
+        --good: #49d39b;
+        --bad: #ff7d7d;
+        --accent: #59c8ff;
       }
 
       * {
@@ -29,622 +23,412 @@
 
       body {
         margin: 0;
-        min-height: 100vh;
-        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-        color: var(--ink);
-        background:
-          radial-gradient(circle at top left, rgba(87, 208, 255, 0.16), transparent 24%),
-          radial-gradient(circle at top right, rgba(77, 224, 168, 0.1), transparent 18%),
-          linear-gradient(180deg, var(--bg-deep) 0%, var(--bg) 100%);
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 "IBM Plex Sans", "Segoe UI", sans-serif;
       }
 
       main {
-        max-width: 1440px;
+        max-width: 1380px;
         margin: 0 auto;
-        padding: 30px 18px 48px;
+        padding: 24px 16px 40px;
       }
 
-      button,
-      input,
-      textarea {
-        font: inherit;
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
       }
 
-      button,
-      input {
-        min-height: 42px;
-        border-radius: 14px;
-      }
-
-      button {
-        border: 1px solid rgba(87, 208, 255, 0.28);
-        background: linear-gradient(180deg, rgba(87, 208, 255, 0.18), rgba(87, 208, 255, 0.08));
-        color: var(--ink);
-        padding: 0 16px;
-        cursor: pointer;
-      }
-
-      button.secondary {
-        border-color: rgba(149, 170, 188, 0.18);
-        background: rgba(149, 170, 188, 0.08);
-      }
-
-      button:disabled {
-        cursor: default;
-        opacity: 0.65;
-      }
-
-      input,
-      textarea {
-        width: 100%;
-        border: 1px solid var(--panel-border);
-        background: rgba(6, 17, 26, 0.96);
-        color: var(--ink);
-      }
-
-      textarea {
-        min-height: 220px;
-        padding: 14px;
-        border-radius: 18px;
-        resize: vertical;
-        font: 0.94rem/1.55 "IBM Plex Mono", "SFMono-Regular", monospace;
-      }
-
-      input[type="range"] {
-        min-height: auto;
-      }
-
-      code,
-      pre {
-        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
-      }
-
-      .hero {
+      .topbar {
         display: flex;
         justify-content: space-between;
-        gap: 20px;
-        align-items: flex-start;
-        margin-bottom: 20px;
+        align-items: center;
+        margin-bottom: 18px;
       }
 
-      .hero h1 {
-        margin: 0;
-        font-size: clamp(2rem, 4vw, 3.4rem);
-        line-height: 0.92;
-        letter-spacing: -0.05em;
+      .connection {
+        color: var(--accent);
       }
 
-      .hero p {
-        margin: 12px 0 0;
-        max-width: 760px;
+      .notice {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--panel-border);
+        background: #0d151b;
         color: var(--muted);
       }
 
-      .hero-actions {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 12px;
-      }
-
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px 14px;
-        border-radius: 999px;
-        border: 1px solid rgba(77, 224, 168, 0.2);
-        background: rgba(77, 224, 168, 0.12);
-        color: var(--ok);
-        font-weight: 600;
-      }
-
-      .badge::before {
-        content: "";
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        background: currentColor;
-        box-shadow: 0 0 16px currentColor;
+      .notice.error {
+        border-color: #6f2f36;
+        color: var(--bad);
       }
 
       .grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));
-        gap: 16px;
+        gap: 14px;
       }
 
       .panel {
         grid-column: span 12;
-        padding: 18px;
-        border-radius: var(--radius);
+        background: var(--panel);
         border: 1px solid var(--panel-border);
-        background: linear-gradient(180deg, var(--panel), var(--panel-strong));
-        box-shadow: var(--shadow);
-      }
-
-      .panel.span-8 {
-        grid-column: span 8;
-      }
-
-      .panel.span-6 {
-        grid-column: span 6;
-      }
-
-      .panel.span-4 {
-        grid-column: span 4;
-      }
-
-      .panel-header {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-        margin-bottom: 14px;
-      }
-
-      .panel-header h2 {
-        margin: 0;
-        font-size: 0.95rem;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-      }
-
-      .meta,
-      .hint,
-      .empty {
-        color: var(--muted);
-        font-size: 0.92rem;
-      }
-
-      .status-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .status-card,
-      .list-item,
-      .memory-card,
-      .debug-card {
-        border: 1px solid rgba(115, 146, 170, 0.16);
-        background: rgba(5, 15, 24, 0.72);
-        border-radius: 20px;
-      }
-
-      .status-card {
-        padding: 14px;
-      }
-
-      .status-card dt {
-        color: var(--muted);
-        font-size: 0.76rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-      }
-
-      .status-card dd {
-        margin: 8px 0 0;
-        font-size: 1rem;
-        font-weight: 600;
-        word-break: break-word;
-      }
-
-      .memory-grid,
-      .stack,
-      .list,
-      .debug-grid {
-        display: grid;
-        gap: 12px;
-      }
-
-      .memory-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .memory-card,
-      .debug-card {
+        border-radius: 16px;
         padding: 16px;
       }
 
-      .memory-card header {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: flex-start;
+      .span-4 {
+        grid-column: span 4;
+      }
+
+      .span-6 {
+        grid-column: span 6;
+      }
+
+      .span-8 {
+        grid-column: span 8;
+      }
+
+      .panel h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
         margin-bottom: 12px;
       }
 
-      .memory-card h3,
-      .debug-card h3 {
-        margin: 0;
-        font-size: 1rem;
-      }
-
-      .memory-actions,
-      .form-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
-
-      .field-grid {
+      .stats {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
+        gap: 10px;
       }
 
-      .field {
-        display: grid;
-        gap: 8px;
+      .stat,
+      .health-card,
+      .conversation-item {
+        border: 1px solid var(--panel-border);
+        border-radius: 12px;
+        padding: 12px;
+        background: #0d151b;
       }
 
-      .field label {
-        font-size: 0.84rem;
+      .stat .label,
+      .meta {
         color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        font-size: 12px;
       }
 
-      .field input[type="text"] {
+      .stat .value {
+        margin-top: 6px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .health-grid,
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .ok {
+        color: var(--good);
+      }
+
+      .bad {
+        color: var(--bad);
+      }
+
+      .controls {
+        display: grid;
+        gap: 10px;
+      }
+
+      .controls-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      button,
+      input,
+      select {
+        width: 100%;
+        min-height: 42px;
+        border-radius: 10px;
+        border: 1px solid var(--panel-border);
+        background: #0d151b;
+        color: var(--text);
+        font: inherit;
         padding: 0 12px;
       }
 
-      .slider-row {
+      button {
+        cursor: pointer;
+        background: #163042;
+      }
+
+      .conversation,
+      .logs {
+        max-height: 420px;
+        overflow: auto;
+      }
+
+      .logs {
         display: grid;
         gap: 6px;
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+        font-size: 12px;
       }
 
-      .slider-head {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        font-size: 0.9rem;
-      }
-
-      .slider-head strong {
-        font-size: 0.92rem;
-      }
-
-      .slider-note {
-        color: var(--muted);
-        font-size: 0.9rem;
-      }
-
-      .list-item {
-        padding: 14px;
-      }
-
-      .timeline-entry {
+      .flow-debug {
         display: grid;
-        gap: 8px;
-      }
-
-      .timeline-head {
-        display: flex;
-        justify-content: space-between;
         gap: 12px;
-        align-items: flex-start;
       }
 
-      .timeline-title {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
+      .flow-track {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 0;
+        align-items: start;
       }
 
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
+      .flow-step {
+        position: relative;
+        padding-top: 2px;
+      }
+
+      .flow-step::after {
+        content: "";
+        position: absolute;
+        top: 10px;
+        left: calc(50% + 12px);
+        width: calc(100% - 24px);
+        height: 2px;
+        background: var(--panel-border);
+      }
+
+      .flow-step:last-child::after {
+        display: none;
+      }
+
+      .flow-step.done::after {
+        background: var(--good);
+      }
+
+      .flow-step.running::after {
+        background: linear-gradient(90deg, var(--accent), rgba(89, 200, 255, 0.25));
+      }
+
+      .flow-node {
+        position: relative;
+        z-index: 1;
+        width: 22px;
+        height: 22px;
         border-radius: 999px;
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-size: 0.78rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        border: 2px solid var(--panel-border);
+        background: #0d151b;
+        margin: 0 auto 8px;
       }
 
-      .pill.user {
-        background: rgba(77, 224, 168, 0.12);
-        color: var(--ok);
+      .flow-step.done .flow-node {
+        border-color: var(--good);
+        background: var(--good);
       }
 
-      .pill.assistant {
-        background: rgba(87, 208, 255, 0.12);
-        color: var(--accent);
+      .flow-step.running .flow-node {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 6px rgba(89, 200, 255, 0.12);
       }
 
-      .pill.system {
-        background: rgba(255, 178, 102, 0.14);
-        color: var(--warn);
+      .flow-step.error .flow-node {
+        border-color: var(--bad);
+        background: var(--bad);
       }
 
-      .pill.tool {
-        background: rgba(255, 125, 125, 0.14);
-        color: var(--danger);
+      .flow-label {
+        text-align: center;
+        font-size: 11px;
+        color: var(--text);
       }
 
-      .timeline-meta {
+      .flow-time {
+        text-align: center;
+        font-size: 11px;
         color: var(--muted);
-        font-size: 0.85rem;
-        text-align: right;
-      }
-
-      .timeline-body {
-        margin: 0;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      details {
-        border-top: 1px solid rgba(115, 146, 170, 0.16);
-        padding-top: 8px;
-      }
-
-      summary {
-        cursor: pointer;
-        color: var(--muted);
-      }
-
-      pre {
-        margin: 10px 0 0;
-        padding: 14px;
-        border-radius: 18px;
-        background: rgba(4, 12, 18, 0.9);
-        color: #c8d8e6;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .path-list {
-        display: grid;
-        gap: 10px;
-      }
-
-      .path-list code {
-        display: block;
         margin-top: 4px;
-        color: var(--ink);
-        word-break: break-all;
       }
 
-      @media (max-width: 1120px) {
-        .panel.span-8,
-        .panel.span-6,
-        .panel.span-4 {
+      .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric-card {
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        padding: 10px;
+        background: #0d151b;
+      }
+
+      .metric-card .metric-label {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .metric-card .metric-value {
+        margin-top: 4px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .log-line {
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: #0d151b;
+        border: 1px solid var(--panel-border);
+      }
+
+      .log-line.warn {
+        border-color: #725427;
+      }
+
+      .log-line.error {
+        border-color: #6f2f36;
+      }
+
+      @media (max-width: 960px) {
+        .span-4,
+        .span-6,
+        .span-8 {
           grid-column: span 12;
         }
 
-        .status-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .memory-grid,
-        .field-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 720px) {
-        .hero {
-          flex-direction: column;
-        }
-
-        .hero-actions {
-          align-items: flex-start;
-        }
-
-        .status-grid {
+        .health-grid,
+        .controls-row,
+        .stats,
+        .metrics-grid {
           grid-template-columns: 1fr;
         }
 
-        .timeline-head {
+        .flow-track {
           grid-template-columns: 1fr;
-          display: grid;
+          gap: 10px;
         }
 
-        .timeline-meta {
-          text-align: left;
+        .flow-step::after {
+          display: none;
         }
       }
     </style>
   </head>
   <body>
     <main>
-      <section class="hero">
+      <div class="topbar">
         <div>
-          <h1>Sonny<br />Console Dashboard</h1>
-          <p>
-            Runtime diagnostics and writeable controls for memory, live session
-            history, personality tuning, and voice configuration.
-          </p>
+          <h1>Sonny Voice Control Center</h1>
+          <p class="meta">UI → runtime → services → playback</p>
         </div>
-        <div class="hero-actions">
-          <span class="badge" id="connection-status">Connecting</span>
-          <button type="button" id="refresh-button">Refresh</button>
-        </div>
-      </section>
+        <div class="connection" id="connection">Connecting...</div>
+      </div>
+      <div class="notice" id="page-notice">Ready.</div>
 
-      <section class="grid">
-        <article class="panel">
-          <div class="panel-header">
-            <h2>Runtime Snapshot</h2>
-            <span class="meta" id="status-updated">Waiting for first fetch</span>
+      <div class="grid">
+        <section class="panel span-4">
+          <h2>Runtime Status</h2>
+          <div class="stats">
+            <div class="stat"><div class="label">State</div><div class="value" id="runtime-state">idle</div></div>
+            <div class="stat"><div class="label">Mic</div><div class="value" id="mic-state">idle</div></div>
+            <div class="stat"><div class="label">Playback</div><div class="value" id="playback-state">idle</div></div>
+            <div class="stat"><div class="label">Session</div><div class="value" id="session-id">none</div></div>
+            <div class="stat"><div class="label">Updated</div><div class="value" id="updated-at">-</div></div>
+            <div class="stat"><div class="label">Last Error</div><div class="value" id="last-error">-</div></div>
+            <div class="stat"><div class="label">Last Transcript</div><div class="value" id="last-transcript">-</div></div>
+            <div class="stat"><div class="label">Last Response</div><div class="value" id="last-response">-</div></div>
           </div>
-          <dl class="status-grid">
-            <div class="status-card">
-              <dt>Gateway</dt>
-              <dd id="status-gateway">Unknown</dd>
-            </div>
-            <div class="status-card">
-              <dt>Provider</dt>
-              <dd id="status-provider">Unknown</dd>
-            </div>
-            <div class="status-card">
-              <dt>Model</dt>
-              <dd id="status-model">Unknown</dd>
-            </div>
-            <div class="status-card">
-              <dt>Voice Runtime</dt>
-              <dd id="status-voice">Unknown</dd>
-            </div>
-            <div class="status-card">
-              <dt>Session Id</dt>
-              <dd id="status-session-id">Unknown</dd>
-            </div>
-            <div class="status-card">
-              <dt>Memory Files</dt>
-              <dd id="status-memory-count">0</dd>
-            </div>
-            <div class="status-card">
-              <dt>Session Messages</dt>
-              <dd id="status-conversation-count">0</dd>
-            </div>
-            <div class="status-card">
-              <dt>Skills</dt>
-              <dd id="status-skill-count">0</dd>
-            </div>
-          </dl>
-        </article>
+        </section>
 
-        <article class="panel span-8">
-          <div class="panel-header">
-            <h2>Memory Workspace</h2>
-            <span class="meta" id="memory-directory-label">Loading memory files</span>
+        <section class="panel span-4">
+          <h2>Voice Controls</h2>
+          <div class="controls">
+            <div class="controls-row">
+              <button id="listen-start">Start Listening</button>
+              <button id="listen-stop">Stop Listening</button>
+            </div>
+            <input id="tts-input" placeholder="Type text for TTS test" value="Sonny voice runtime online." />
+            <select id="voice-select"></select>
+            <div class="controls-row">
+              <button id="tts-test">Test TTS</button>
+              <button id="refresh-health">Refresh Health</button>
+            </div>
+            <div class="controls-row">
+              <button id="interrupt-playback">Interrupt Playback</button>
+              <button id="replay-last-tts">Replay Last TTS</button>
+            </div>
+            <div class="controls-row">
+              <button id="reset-idle">Reset to Idle</button>
+              <button id="clear-logs">Clear Logs</button>
+            </div>
           </div>
-          <div class="memory-grid" id="memory-cards">
-            <p class="empty">No memory documents loaded yet.</p>
-          </div>
-        </article>
+        </section>
 
-        <article class="panel span-4">
-          <div class="panel-header">
-            <h2>Debug Surfaces</h2>
-            <span class="meta" id="system-prompt-length">0 chars</span>
-          </div>
-          <div class="debug-grid">
-            <section class="debug-card">
-              <h3>Paths</h3>
-              <div class="path-list">
-                <div class="meta">
-                  Memory directory
-                  <code id="status-memory-directory">Loading</code>
-                </div>
-                <div class="meta">
-                  Runtime config
-                  <code id="config-path">Loading</code>
-                </div>
-                <div class="meta">
-                  Personality config
-                  <code id="personality-path">Loading</code>
-                </div>
-              </div>
-            </section>
-            <section class="debug-card">
-              <h3>System Prompt</h3>
-              <pre id="system-prompt-view">Loading...</pre>
-            </section>
-          </div>
-        </article>
+        <section class="panel span-4">
+          <h2>Service Health</h2>
+          <div class="health-grid" id="health-grid"></div>
+        </section>
 
-        <article class="panel span-6">
-          <div class="panel-header">
-            <h2>Personality</h2>
-            <span class="meta" id="personality-status">No personality data loaded</span>
-          </div>
-          <form class="stack" id="personality-form">
-            <div class="slider-row">
-              <div class="slider-head">
-                <strong>Verbosity</strong>
-                <span id="personality-verbosity-value">0%</span>
-              </div>
-              <input id="personality-verbosity" type="range" min="0" max="100" step="1" />
-              <div class="slider-note" id="personality-verbosity-note">Loading</div>
-            </div>
-            <div class="slider-row">
-              <div class="slider-head">
-                <strong>Assertiveness</strong>
-                <span id="personality-assertiveness-value">0%</span>
-              </div>
-              <input id="personality-assertiveness" type="range" min="0" max="100" step="1" />
-              <div class="slider-note" id="personality-assertiveness-note">Loading</div>
-            </div>
-            <div class="slider-row">
-              <div class="slider-head">
-                <strong>Humor</strong>
-                <span id="personality-humor-value">0%</span>
-              </div>
-              <input id="personality-humor" type="range" min="0" max="100" step="1" />
-              <div class="slider-note" id="personality-humor-note">Loading</div>
-            </div>
-            <div class="form-actions">
-              <button type="submit" id="personality-save-button">Save Personality</button>
-            </div>
-          </form>
-        </article>
+        <section class="panel span-6">
+          <h2>Conversation</h2>
+          <div class="stack conversation" id="conversation">No conversation yet.</div>
+        </section>
 
-        <article class="panel span-6">
-          <div class="panel-header">
-            <h2>Voice Settings</h2>
-            <span class="meta" id="voice-status">No voice settings loaded</span>
-          </div>
-          <form class="stack" id="voice-settings-form">
-            <div class="field-grid">
-              <label class="field">
-                <span>Wake Word</span>
-                <input id="wake-word-input" type="text" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>Voice Model</span>
-                <input id="voice-model-input" type="text" autocomplete="off" />
-              </label>
-            </div>
-            <div class="hint">
-              Wake word is written to runtime config. Voice model is written to
-              the personality voice field.
-            </div>
-            <div class="form-actions">
-              <button type="submit" id="voice-save-button">Save Voice Settings</button>
-            </div>
-          </form>
-        </article>
+        <section class="panel span-6">
+          <h2>Event Log</h2>
+          <div class="logs" id="logs">No events yet.</div>
+        </section>
 
-        <article class="panel span-8">
-          <div class="panel-header">
-            <h2>Current Session Timeline</h2>
-            <span class="meta">Ordered oldest to newest for traceability</span>
+        <section class="panel span-6">
+          <h2>Pipeline Debug</h2>
+          <div class="stack">
+            <div class="controls-row">
+              <button id="replay-last-recording">Replay Last Recording</button>
+              <button id="retranscribe-last-audio">Re-transcribe Last Audio</button>
+            </div>
+            <div class="conversation-item flow-debug">
+              <h3>Pipeline Flow</h3>
+              <div id="pipeline-flow" class="flow-track"></div>
+            </div>
+            <div class="conversation-item">
+              <h3>Latency Metrics</h3>
+              <div id="latency-metrics" class="metrics-grid"></div>
+            </div>
+            <div class="conversation-item">
+              <h3>Last Audio</h3>
+              <div class="meta" id="last-audio-debug">No recording metadata yet.</div>
+            </div>
+            <div class="conversation-item">
+              <h3>Pipeline</h3>
+              <div class="meta" id="pipeline-debug">No pipeline run yet.</div>
+            </div>
+            <div class="conversation-item">
+              <h3>STT Debug</h3>
+              <div class="meta" id="stt-debug">No STT debug yet.</div>
+            </div>
+            <div class="conversation-item">
+              <h3>Recorder</h3>
+              <div class="meta" id="recorder-debug">No recorder diagnostics yet.</div>
+            </div>
           </div>
-          <div class="list" id="current-session-list">
-            <p class="empty">No current session messages loaded yet.</p>
-          </div>
-        </article>
-
-        <article class="panel span-4">
-          <div class="panel-header">
-            <h2>Recent Activity</h2>
-            <span class="meta">Newest persisted messages first</span>
-          </div>
-          <div class="list" id="recent-history-list">
-            <p class="empty">No persisted history loaded yet.</p>
-          </div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-header">
-            <h2>Registered Skills</h2>
-            <span class="meta" id="skills-directory">Waiting for gateway</span>
-          </div>
-          <div class="list" id="skills-list">
-            <p class="empty">No skill data loaded yet.</p>
-          </div>
-        </article>
-      </section>
+        </section>
+      </div>
     </main>
-
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

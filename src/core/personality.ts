@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+
+import { DEFAULT_PERSONALITY_PATH } from './paths.js';
 
 export type InterruptionPolicy = 'passive' | 'active';
 
@@ -34,8 +36,6 @@ export interface PersonalityUpdate {
   humor?: number;
   interruptionPolicy?: InterruptionPolicy;
 }
-
-const DEFAULT_PERSONALITY_PATH = join(process.cwd(), 'data', 'personality.json');
 
 export function loadPersonalityConfig(
   config: PersonalityLoaderConfig = {},

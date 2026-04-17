@@ -4,6 +4,7 @@ import {
   Router,
   type ErrorRequestHandler,
   type RequestHandler,
+  type Response,
 } from 'express';
 
 import { type Gateway } from '../../core/gateway.js';
@@ -14,6 +15,10 @@ import {
 } from '../../core/config.js';
 import type { ConversationHistoryEntry } from '../../core/conversation-history.js';
 import type { LlmMessage, ToolCall } from '../../core/providers/llm.js';
+import {
+  RuntimeStateStore,
+  type RuntimeStateEvent,
+} from '../../core/runtime-state.js';
 import {
   getDefaultPersonalityPath,
   loadPersonalityConfig,
@@ -28,6 +33,7 @@ import {
 } from '../../memory/memory-store.js';
 import { RecentMemory } from '../../memory/recent-memory.js';
 import type { VoiceManager } from '../../voice/voice-manager.js';
+import type { VoiceSessionOrchestrator } from '../../voice/voice-session-orchestrator.js';
 
 const DEFAULT_CONVERSATION_LIMIT = 50;
 
@@ -36,6 +42,23 @@ export interface ConsoleApiConfig {
   memoryStore?: MemoryStore;
   recentMemory?: RecentMemory;
   voiceManager?: Pick<VoiceManager, 'currentState' | 'isRunning'>;
+  runtimeState?: RuntimeStateStore;
+  voiceRuntime?: Pick<
+    VoiceSessionOrchestrator,
+    | 'startListening'
+    | 'stopListening'
+    | 'testTts'
+    | 'replayLastTts'
+    | 'retranscribeLastAudio'
+    | 'interruptPlayback'
+    | 'refreshHealth'
+    | 'resetToIdle'
+    | 'clearLogs'
+    | 'getLastAudioDebug'
+    | 'getPipelineDebug'
+    | 'getRecorderDebug'
+    | 'state'
+  >;
   llmProviderName?: string;
   currentModel?: string;
 }
@@ -52,6 +75,11 @@ interface MemoryUpdateBody {
 interface VoiceSettingsUpdateBody {
   wakeWord: string;
   voiceModel: string;
+}
+
+interface TestTtsBody {
+  text: string;
+  voice?: string;
 }
 
 type PersonalityUpdateBody = Partial<PersonalityConfig>;
@@ -75,6 +103,199 @@ export function createConsoleApiRuntime(
   const recentMemory = config.recentMemory ?? new RecentMemory();
   const ownsRecentMemory = config.recentMemory === undefined;
   const router = Router();
+
+  router.get(
+    '/runtime/state',
+    createAsyncHandler(async (_request, response) => {
+      response.json(readRuntimeState(config.runtimeState));
+    }),
+  );
+
+  router.get(
+    '/runtime/health',
+    createAsyncHandler(async (_request, response) => {
+      response.json({
+        services: readRuntimeState(config.runtimeState).services,
+      });
+    }),
+  );
+
+  router.get(
+    '/runtime/logs',
+    createAsyncHandler(async (request, response) => {
+      const limit = parseOptionalLimit(request.query.limit);
+
+      response.json({
+        logs: config.runtimeState?.listLogs(limit) ?? [],
+      });
+    }),
+  );
+
+  router.get(
+    '/runtime/conversation',
+    createAsyncHandler(async (request, response) => {
+      const limit = parseOptionalLimit(request.query.limit);
+
+      response.json({
+        conversation: config.runtimeState?.listConversation(limit) ?? [],
+      });
+    }),
+  );
+
+  router.get(
+    '/runtime/debug/last-audio',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      response.json(config.voiceRuntime.getLastAudioDebug());
+    }),
+  );
+
+  router.get(
+    '/runtime/debug/last-audio/file',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      const lastAudio = config.voiceRuntime.getLastAudioDebug();
+
+      if (!lastAudio.exists || lastAudio.path === null) {
+        response.status(404).json({
+          error: 'No saved manual recording is available.',
+        });
+        return;
+      }
+
+      response.type('audio/wav');
+      response.sendFile(lastAudio.path);
+    }),
+  );
+
+  router.get(
+    '/runtime/debug/pipeline',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      response.json(config.voiceRuntime.getPipelineDebug());
+    }),
+  );
+
+  router.get(
+    '/runtime/debug/recorder',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      response.json(config.voiceRuntime.getRecorderDebug());
+    }),
+  );
+
+  router.get('/runtime/events', (_request, response) => {
+    attachRuntimeEventStream(response, config.runtimeState);
+  });
+
+  router.post(
+    '/runtime/debug/retranscribe-last-audio',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      const result = await config.voiceRuntime.retranscribeLastAudio();
+      response.json({
+        status: 'ok',
+        result,
+      });
+    }),
+  );
+
+  router.post(
+    '/voice/listen/start',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.startListening();
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/voice/listen/stop',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.stopListening();
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/voice/tts/test',
+    createAsyncHandler(async (request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      const payload = parseTestTtsBody(request.body);
+      await config.voiceRuntime.testTts(payload.text, payload.voice);
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/voice/tts/replay',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.replayLastTts();
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/voice/playback/interrupt',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.interruptPlayback();
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/runtime/reset',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.resetToIdle();
+      response.json({
+        status: 'ok',
+        state: readRuntimeState(config.runtimeState),
+      });
+    }),
+  );
+
+  router.post(
+    '/runtime/logs/clear',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      config.voiceRuntime.clearLogs();
+      response.json({
+        status: 'ok',
+        logs: config.runtimeState?.listLogs() ?? [],
+      });
+    }),
+  );
+
+  router.post(
+    '/runtime/health/refresh',
+    createAsyncHandler(async (_request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      await config.voiceRuntime.refreshHealth();
+      response.json({
+        status: 'ok',
+        services: readRuntimeState(config.runtimeState).services,
+      });
+    }),
+  );
 
   router.get(
     '/personality',
@@ -430,6 +651,20 @@ function parseVoiceSettingsUpdateBody(body: unknown): VoiceSettingsUpdateBody {
   };
 }
 
+function parseTestTtsBody(body: unknown): TestTtsBody {
+  if (!isRecord(body)) {
+    throw new Error('TTS body must be an object');
+  }
+
+  return {
+    text: readTrimmedString(body.text, 'text'),
+    voice:
+      typeof body.voice === 'string' && body.voice.trim().length > 0
+        ? body.voice.trim()
+        : undefined,
+  };
+}
+
 function parseMemoryFileParam(value: unknown): MemoryDocumentName {
   if (typeof value !== 'string') {
     throw new Error('Memory file parameter must be a string');
@@ -462,6 +697,137 @@ function parseConversationLimit(value: unknown): number {
   }
 
   return parsed;
+}
+
+function parseOptionalLimit(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error('Limit must be a string');
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error('Limit must be a positive integer');
+  }
+
+  return parsed;
+}
+
+function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
+  return runtimeState?.getSnapshot() ?? {
+    currentState: 'idle',
+    updatedAt: new Date().toISOString(),
+    lastError: null,
+    lastTranscript: null,
+    lastResponseText: null,
+    currentSessionId: null,
+    micActive: false,
+    playbackActive: false,
+    services: {
+      ollama: {
+        name: 'ollama',
+        label: 'Ollama',
+        url: null,
+        online: false,
+        checkedAt: null,
+        error: 'Runtime state is not attached.',
+      },
+      stt: {
+        name: 'stt',
+        label: 'Whisper STT',
+        url: null,
+        online: false,
+        checkedAt: null,
+        error: 'Runtime state is not attached.',
+      },
+      tts: {
+        name: 'tts',
+        label: 'Qwen3-TTS',
+        url: null,
+        online: false,
+        checkedAt: null,
+        error: 'Runtime state is not attached.',
+      },
+      wake_word: {
+        name: 'wake_word',
+        label: 'Wake Word',
+        url: null,
+        online: false,
+        checkedAt: null,
+        error: 'Runtime state is not attached.',
+      },
+      vad: {
+        name: 'vad',
+        label: 'VAD',
+        url: null,
+        online: false,
+        checkedAt: null,
+        error: 'Runtime state is not attached.',
+      },
+    },
+  };
+}
+
+function assertVoiceRuntime(
+  value: ConsoleApiConfig['voiceRuntime'],
+): asserts value is NonNullable<ConsoleApiConfig['voiceRuntime']> {
+  if (value === undefined) {
+    throw new Error('Voice runtime is not attached.');
+  }
+}
+
+function attachRuntimeEventStream(
+  response: Response,
+  runtimeState: RuntimeStateStore | undefined,
+): void {
+  response.setHeader('content-type', 'text/event-stream');
+  response.setHeader('cache-control', 'no-cache');
+  response.setHeader('connection', 'keep-alive');
+  response.flushHeaders();
+
+  const write = (event: RuntimeStateEvent): void => {
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  if (runtimeState !== undefined) {
+    write({
+      type: 'snapshot',
+      snapshot: runtimeState.getSnapshot(),
+    });
+
+    for (const entry of runtimeState.listLogs(100)) {
+      write({
+        type: 'log',
+        entry,
+      });
+    }
+
+    for (const turn of runtimeState.listConversation(50)) {
+      write({
+        type: 'conversation',
+        turn,
+      });
+    }
+  }
+
+  const detach =
+    runtimeState?.subscribe((event) => {
+      write(event);
+    }) ?? (() => undefined);
+  const keepAlive = setInterval(() => {
+    response.write(': keep-alive\n\n');
+  }, 15_000);
+  keepAlive.unref();
+
+  response.on('close', () => {
+    clearInterval(keepAlive);
+    detach();
+    response.end();
+  });
 }
 
 function getGatewayProvider(gateway: Gateway | undefined): unknown {

@@ -8,7 +8,10 @@ import {
 import { test } from 'node:test';
 
 import { ChatterboxProvider } from '../src/voice/providers/chatterbox.js';
-import { FasterWhisperProvider } from '../src/voice/providers/faster-whisper.js';
+import {
+  extractTranscriptFromWhisperPayload,
+  FasterWhisperProvider,
+} from '../src/voice/providers/faster-whisper.js';
 
 async function startServer(
   handler: (request: IncomingMessage, response: ServerResponse) => Promise<void> | void,
@@ -183,6 +186,104 @@ test('FasterWhisperProvider streams NDJSON transcript updates', async () => {
   } finally {
     await server.close();
   }
+});
+
+test('FasterWhisperProvider accepts nested and segmented transcript payloads', async () => {
+  const audio = Buffer.from('RIFF-test-audio');
+  const payloads = [
+    {
+      result: {
+        text: 'nested transcript',
+      },
+      language: 'en',
+    },
+    {
+      segments: [
+        {
+          text: 'segment one',
+          start: 0,
+          end: 0.5,
+        },
+        {
+          text: 'segment two',
+          start: 0.5,
+          end: 1,
+        },
+      ],
+      language: 'en',
+    },
+  ];
+  let requestCount = 0;
+
+  const server = await startServer(async (_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(payloads[requestCount++]));
+  });
+
+  try {
+    const provider = new FasterWhisperProvider({ baseUrl: server.baseUrl });
+
+    const nested = await provider.transcribe(audio);
+    const segmented = await provider.transcribe(audio);
+
+    assert.equal(nested.text, 'nested transcript');
+    assert.equal(segmented.text, 'segment one segment two');
+  } finally {
+    await server.close();
+  }
+});
+
+test('FasterWhisperProvider reports empty transcripts with a specific failure reason', async () => {
+  const server = await startServer(async (_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(
+      JSON.stringify({
+        text: '',
+        language: 'en',
+        segments: [],
+      }),
+    );
+  });
+
+  try {
+    const provider = new FasterWhisperProvider({ baseUrl: server.baseUrl });
+
+    await assert.rejects(
+      provider.transcribe(Buffer.from('RIFF-silence')),
+      /stt_empty_transcript:/,
+    );
+
+    assert.deepStrictEqual(provider.getLastDebugInfo(), {
+      requestUrl: `${server.baseUrl}/transcribe`,
+      httpStatus: 200,
+      contentType: 'application/json',
+      rawBodyPreview: '{"text":"","language":"en","segments":[]}',
+      responseKeys: ['text', 'language', 'segments'],
+      transcript: '',
+      transcriptLength: 0,
+      failureReason: 'stt_empty_transcript',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('extractTranscriptFromWhisperPayload applies the expected fallback order', () => {
+  assert.equal(
+    extractTranscriptFromWhisperPayload(
+      {
+        text: ' direct ',
+        result: { text: 'nested' },
+        transcript: 'fallback',
+      },
+      [{
+        text: 'segment text',
+        start: 0,
+        end: 1,
+      }],
+    ),
+    'direct',
+  );
 });
 
 test('ChatterboxProvider sends JSON payloads that match the bundled TTS service', async () => {

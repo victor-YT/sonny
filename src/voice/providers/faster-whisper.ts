@@ -1,10 +1,18 @@
-import type { SttOptions, SttProvider, SttResult, SttSegment } from './stt.js';
+import type {
+  SttDebugInfo,
+  SttFailureReason,
+  SttOptions,
+  SttProvider,
+  SttResult,
+  SttSegment,
+} from './stt.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8000';
 const DEFAULT_TRANSCRIBE_PATH = '/transcribe';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_FILENAME = 'audio.wav';
 const DEFAULT_MIME_TYPE = 'audio/wav';
+const RAW_BODY_PREVIEW_LIMIT = 800;
 
 interface FasterWhisperResponse {
   text: string;
@@ -34,6 +42,8 @@ export class FasterWhisperProvider implements SttProvider {
   private readonly mimeType: string;
   private readonly headers: Record<string, string>;
 
+  private lastDebugInfo: SttDebugInfo | null = null;
+
   public constructor(config: FasterWhisperConfig = {}) {
     this.baseUrl = this.normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
     this.transcribePath = this.normalizePath(
@@ -45,12 +55,22 @@ export class FasterWhisperProvider implements SttProvider {
     this.headers = config.headers ?? {};
   }
 
+  public getLastDebugInfo(): SttDebugInfo | null {
+    return this.lastDebugInfo === null
+      ? null
+      : {
+          ...this.lastDebugInfo,
+          responseKeys: [...this.lastDebugInfo.responseKeys],
+        };
+  }
+
   public async transcribe(
     audio: Buffer,
     options: SttOptions = {},
   ): Promise<SttResult> {
+    const requestUrl = `${this.baseUrl}${this.transcribePath}`;
     const response = await this.fetchWithTimeout(
-      `${this.baseUrl}${this.transcribePath}`,
+      requestUrl,
       {
         method: 'POST',
         headers: this.buildHeaders(options),
@@ -59,10 +79,27 @@ export class FasterWhisperProvider implements SttProvider {
     );
 
     if (!response.ok) {
-      throw new Error(await this.buildHttpError(response, 'faster-whisper'));
+      const debugInfo = await this.buildHttpErrorDebugInfo(response, requestUrl);
+      const detail = debugInfo.rawBodyPreview === null ? '' : `: ${debugInfo.rawBodyPreview}`;
+
+      this.lastDebugInfo = debugInfo;
+      throw new Error(
+        `stt_http_error: faster-whisper request failed with status ${response.status} ${response.statusText}${detail}`,
+      );
     }
 
-    const result = await this.parseResponse(response);
+    const result = await this.parseResponse(response, requestUrl);
+
+    this.lastDebugInfo = {
+      requestUrl,
+      httpStatus: response.status,
+      contentType: response.headers.get('content-type') ?? '',
+      rawBodyPreview: this.lastDebugInfo?.rawBodyPreview ?? null,
+      responseKeys: this.lastDebugInfo?.responseKeys ?? [],
+      transcript: result.text,
+      transcriptLength: result.text.length,
+      failureReason: null,
+    };
 
     return {
       text: result.text,
@@ -76,8 +113,9 @@ export class FasterWhisperProvider implements SttProvider {
     audioStream: AsyncIterable<Buffer>,
     options: SttOptions = {},
   ): AsyncIterable<SttResult> {
+    const requestUrl = `${this.baseUrl}${this.transcribePath}?stream=true`;
     const response = await this.fetchWithTimeout(
-      `${this.baseUrl}${this.transcribePath}?stream=true`,
+      requestUrl,
       {
         method: 'POST',
         headers: this.buildHeaders(options),
@@ -87,11 +125,27 @@ export class FasterWhisperProvider implements SttProvider {
     );
 
     if (!response.ok) {
-      throw new Error(await this.buildHttpError(response, 'faster-whisper'));
+      const debugInfo = await this.buildHttpErrorDebugInfo(response, requestUrl);
+      const detail = debugInfo.rawBodyPreview === null ? '' : `: ${debugInfo.rawBodyPreview}`;
+
+      this.lastDebugInfo = debugInfo;
+      throw new Error(
+        `stt_http_error: faster-whisper request failed with status ${response.status} ${response.statusText}${detail}`,
+      );
     }
 
     if (response.body === null) {
-      throw new Error('faster-whisper streaming response body is unavailable');
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: response.status,
+        contentType: response.headers.get('content-type') ?? '',
+        rawBodyPreview: null,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_invalid_json',
+      };
+      throw new Error('stt_invalid_json: faster-whisper streaming response body is unavailable');
     }
 
     const decoder = new TextDecoder();
@@ -114,14 +168,19 @@ export class FasterWhisperProvider implements SttProvider {
           continue;
         }
 
-        yield this.toSttResult(this.parseJsonPayload(JSON.parse(line) as unknown));
+        const parsed = this.parseJsonText(line, requestUrl, response);
+        const result = this.toSttResult(parsed);
+
+        yield result;
       }
     }
 
     const trailing = `${buffer}${decoder.decode()}`.trim();
 
     if (trailing.length > 0) {
-      yield this.toSttResult(this.parseJsonPayload(JSON.parse(trailing) as unknown));
+      const parsed = this.parseJsonText(trailing, requestUrl, response);
+
+      yield this.toSttResult(parsed);
     }
   }
 
@@ -153,7 +212,7 @@ export class FasterWhisperProvider implements SttProvider {
         error.name === 'AbortError'
       ) {
         throw new Error(
-          `faster-whisper request timed out after ${this.timeoutMs}ms`,
+          `stt_http_error: faster-whisper request timed out after ${this.timeoutMs}ms`,
         );
       }
 
@@ -193,53 +252,151 @@ export class FasterWhisperProvider implements SttProvider {
     return headers;
   }
 
-  private async buildHttpError(
+  private async buildHttpErrorDebugInfo(
     response: Response,
-    providerName: string,
-  ): Promise<string> {
-    const errorBody = (await response.text()).trim();
-    const detail = errorBody.length > 0 ? `: ${errorBody}` : '';
+    requestUrl: string,
+  ): Promise<SttDebugInfo> {
+    const body = (await response.text()).trim();
 
-    return `${providerName} request failed with status ${response.status} ${response.statusText}${detail}`;
+    return {
+      requestUrl,
+      httpStatus: response.status,
+      contentType: response.headers.get('content-type') ?? '',
+      rawBodyPreview: truncateBody(body),
+      responseKeys: [],
+      transcript: null,
+      transcriptLength: null,
+      failureReason: 'stt_http_error',
+    };
   }
 
   private async parseResponse(
     response: Response,
+    requestUrl: string,
   ): Promise<FasterWhisperResponse> {
     const contentType = response.headers.get('content-type') ?? '';
+    const rawBody = (await response.text()).trim();
 
     if (contentType.includes('application/json')) {
-      const payload: unknown = await response.json();
-
-      return this.parseJsonPayload(payload);
+      return this.parseJsonText(rawBody, requestUrl, response);
     }
 
-    const text = (await response.text()).trim();
-
-    if (text.length === 0) {
-      throw new Error('faster-whisper response did not include transcribed text');
+    if (rawBody.length === 0) {
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: response.status,
+        contentType,
+        rawBodyPreview: null,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_empty_transcript',
+      };
+      throw new Error('stt_empty_transcript: faster-whisper response did not include transcribed text');
     }
 
-    return { text };
+    this.lastDebugInfo = {
+      requestUrl,
+      httpStatus: response.status,
+      contentType,
+      rawBodyPreview: truncateBody(rawBody),
+      responseKeys: [],
+      transcript: rawBody,
+      transcriptLength: rawBody.length,
+      failureReason: null,
+    };
+
+    return { text: rawBody };
   }
 
-  private parseJsonPayload(payload: unknown): FasterWhisperResponse {
-    if (!this.isRecord(payload)) {
-      throw new Error('faster-whisper response payload must be an object');
+  private parseJsonText(
+    rawBody: string,
+    requestUrl: string,
+    response: Response,
+  ): FasterWhisperResponse {
+    let payload: unknown;
+
+    try {
+      payload = rawBody.length === 0 ? {} : JSON.parse(rawBody) as unknown;
+    } catch (error: unknown) {
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: response.status,
+        contentType: response.headers.get('content-type') ?? '',
+        rawBodyPreview: truncateBody(rawBody),
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_invalid_json',
+      };
+      throw new Error(
+        `stt_invalid_json: faster-whisper returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
-    const text = payload.text;
+    return this.parseJsonPayload(
+      payload,
+      {
+        requestUrl,
+        httpStatus: response.status,
+        contentType: response.headers.get('content-type') ?? '',
+        rawBodyPreview: truncateBody(rawBody),
+      },
+    );
+  }
 
-    if (typeof text !== 'string' || text.trim().length === 0) {
-      throw new Error('faster-whisper response payload is missing a text field');
+  private parseJsonPayload(
+    payload: unknown,
+    baseDebug: Pick<SttDebugInfo, 'requestUrl' | 'httpStatus' | 'contentType' | 'rawBodyPreview'>,
+  ): FasterWhisperResponse {
+    if (!this.isRecord(payload)) {
+      this.lastDebugInfo = {
+        ...baseDebug,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_unrecognized_payload_shape',
+      };
+      throw new Error('stt_unrecognized_payload_shape: faster-whisper response payload must be an object');
+    }
+
+    const responseKeys = Object.keys(payload);
+    let segments: SttSegment[] | undefined;
+    let transcript = '';
+
+    try {
+      segments = this.parseSegments(payload.segments);
+      transcript = extractTranscriptFromWhisperPayload(payload, segments);
+    } catch (error: unknown) {
+      this.lastDebugInfo = {
+        ...baseDebug,
+        responseKeys,
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_unrecognized_payload_shape',
+      };
+      throw error;
+    }
+
+    this.lastDebugInfo = {
+      ...baseDebug,
+      responseKeys,
+      transcript,
+      transcriptLength: transcript.length,
+      failureReason: transcript.length === 0 ? 'stt_empty_transcript' : null,
+    };
+
+    if (transcript.length === 0) {
+      throw new Error(
+        `stt_empty_transcript: faster-whisper returned an empty transcript. keys=${responseKeys.join(',') || '(none)'}`,
+      );
     }
 
     const language = this.readOptionalString(payload.language);
     const confidence = this.readOptionalNumber(payload.confidence);
-    const segments = this.parseSegments(payload.segments);
 
     return {
-      text: text.trim(),
+      text: transcript,
       language,
       confidence,
       segments,
@@ -285,12 +442,12 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     if (!Array.isArray(payload)) {
-      throw new Error('faster-whisper response segments must be an array');
+      throw new Error('stt_unrecognized_payload_shape: faster-whisper response segments must be an array');
     }
 
     return payload.map((segment, index) => {
       if (!this.isRecord(segment)) {
-        throw new Error(`faster-whisper segment at index ${index} must be an object`);
+        throw new Error(`stt_unrecognized_payload_shape: faster-whisper segment at index ${index} must be an object`);
       }
 
       const text = segment.text;
@@ -298,12 +455,12 @@ export class FasterWhisperProvider implements SttProvider {
       const end = segment.end;
 
       if (typeof text !== 'string') {
-        throw new Error(`faster-whisper segment at index ${index} is missing text`);
+        throw new Error(`stt_unrecognized_payload_shape: faster-whisper segment at index ${index} is missing text`);
       }
 
       if (typeof start !== 'number' || typeof end !== 'number') {
         throw new Error(
-          `faster-whisper segment at index ${index} must include numeric start and end`,
+          `stt_unrecognized_payload_shape: faster-whisper segment at index ${index} must include numeric start and end`,
         );
       }
 
@@ -326,6 +483,67 @@ export class FasterWhisperProvider implements SttProvider {
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
   }
+}
+
+export function extractTranscriptFromWhisperPayload(
+  payload: Record<string, unknown>,
+  segments: SttSegment[] | undefined,
+): string {
+  const directText = readTrimmedString(payload.text);
+
+  if (directText !== null) {
+    return directText;
+  }
+
+  const transcript = readTrimmedString(payload.transcript);
+
+  if (transcript !== null) {
+    return transcript;
+  }
+
+  const nestedResult = payload.result;
+
+  if (isRecord(nestedResult)) {
+    const nestedText = readTrimmedString(nestedResult.text);
+
+    if (nestedText !== null) {
+      return nestedText;
+    }
+  }
+
+  if (segments !== undefined) {
+    return segments
+      .map((segment) => segment.text.trim())
+      .filter((value) => value.length > 0)
+      .join(' ')
+      .trim();
+  }
+
+  throw new Error(
+    `stt_unrecognized_payload_shape: faster-whisper response did not include transcript fields. keys=${Object.keys(payload).join(',') || '(none)'}`,
+  );
+}
+
+function readTrimmedString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  return value.trim();
+}
+
+function truncateBody(value: string): string | null {
+  if (value.length === 0) {
+    return null;
+  }
+
+  return value.length <= RAW_BODY_PREVIEW_LIMIT
+    ? value
+    : `${value.slice(0, RAW_BODY_PREVIEW_LIMIT)}...`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 interface RequestInitWithDuplex extends RequestInit {

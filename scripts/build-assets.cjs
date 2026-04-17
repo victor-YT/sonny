@@ -9,11 +9,14 @@ const DIST_ASSET_DIR = path.join(PROJECT_ROOT, 'dist', 'ui', 'assets');
 const SOURCE_PANEL_HTML_PATH = path.join(PROJECT_ROOT, 'src', 'ui', 'panel', 'index.html');
 const DIST_PANEL_DIR = path.join(PROJECT_ROOT, 'dist', 'ui', 'panel');
 const DIST_PANEL_HTML_PATH = path.join(DIST_PANEL_DIR, 'index.html');
+const SOURCE_CONSOLE_PUBLIC_DIR = path.join(PROJECT_ROOT, 'src', 'ui', 'console', 'public');
+const DIST_CONSOLE_PUBLIC_DIR = path.join(PROJECT_ROOT, 'dist', 'ui', 'console', 'public');
 
 async function main() {
   await generateTrayIcons();
   await copyAssetsToDist();
   copyPanelHtmlToDist();
+  await copyConsolePublicToDist();
 }
 
 async function generateTrayIcons() {
@@ -144,6 +147,14 @@ async function copyAssetsToDist() {
 function copyPanelHtmlToDist() {
   mkdirSync(DIST_PANEL_DIR, { recursive: true });
   copyFileSync(SOURCE_PANEL_HTML_PATH, DIST_PANEL_HTML_PATH);
+}
+
+async function copyConsolePublicToDist() {
+  if (existsSync(DIST_CONSOLE_PUBLIC_DIR)) {
+    await rm(DIST_CONSOLE_PUBLIC_DIR, { recursive: true, force: true });
+  }
+
+  await cp(SOURCE_CONSOLE_PUBLIC_DIR, DIST_CONSOLE_PUBLIC_DIR, { recursive: true });
 }
 
 main().catch((error) => {

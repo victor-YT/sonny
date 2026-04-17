@@ -19,7 +19,8 @@
     }
   },
   "memory": {
-    "retentionDays": 7
+    "retentionDays": 7,
+    "maxTokens": 4096
   },
   "skills": {
     "permissions": {

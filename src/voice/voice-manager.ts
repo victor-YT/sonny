@@ -6,7 +6,7 @@ import { TimingTracker } from '../core/timing.js';
 import { ChatterboxProvider } from './providers/chatterbox.js';
 import { FasterWhisperProvider } from './providers/faster-whisper.js';
 import { PorcupineProvider } from './providers/porcupine.js';
-import type { SttOptions, SttProvider, SttResult } from './providers/stt.js';
+import type { SttDebugInfo, SttOptions, SttProvider, SttResult } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type {
   WakeWordEvent,
@@ -36,6 +36,10 @@ export type VoiceManagerState =
 export type VoiceManagerEventType =
   | 'state_changed'
   | 'wake_word_detected'
+  | 'first_token'
+  | 'sentence_ready'
+  | 'tts_request_started'
+  | 'tts_first_audio_ready'
   | 'transcription'
   | 'response'
   | 'audio_chunk'
@@ -104,6 +108,7 @@ export interface VoiceManagerConfig {
   playbackQueue?: StreamingAudioQueue;
   speaker?: Speaker;
   responseProcessor?: ResponseProcessor;
+  speechSegmentationStrategy?: 'conservative' | 'aggressive';
 }
 
 export class VoiceManager {
@@ -119,6 +124,7 @@ export class VoiceManager {
   private readonly playbackQueue: StreamingAudioQueue;
   private readonly speaker: Speaker | undefined;
   private readonly responseProcessor: ResponseProcessor;
+  private readonly speechSegmentationStrategy: 'conservative' | 'aggressive';
   private readonly listeners = new Set<VoiceManagerListener>();
   private readonly wakeWordListener: WakeWordListener;
   private readonly speakerListener: SpeakerListener | undefined;
@@ -127,6 +133,8 @@ export class VoiceManager {
   private pipelineTask: Promise<unknown> | undefined;
   private pipelineAbortController: AbortController | undefined;
   private pendingTimingTracker: TimingTracker | undefined;
+  private firstTtsRequestStartedEmitted = false;
+  private firstTtsAudioReadyEmitted = false;
   private started = false;
 
   public constructor(config: VoiceManagerConfig) {
@@ -142,6 +150,8 @@ export class VoiceManager {
     this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
     this.speaker = config.speaker;
     this.responseProcessor = config.responseProcessor ?? new ResponseProcessor();
+    this.speechSegmentationStrategy =
+      config.speechSegmentationStrategy ?? 'aggressive';
     this.wakeWordListener = (event) => {
       void this.handleWakeWordEvent(event);
     };
@@ -239,12 +249,20 @@ export class VoiceManager {
     return this.state;
   }
 
+  public get sttDebugInfo(): SttDebugInfo | null {
+    return this.sttProvider.getLastDebugInfo?.() ?? null;
+  }
+
   public get isRunning(): boolean {
     return this.started;
   }
 
   public get audioQueue(): StreamingAudioQueue {
     return this.playbackQueue;
+  }
+
+  public async warmupTts(): Promise<void> {
+    await this.ttsProvider.warmup?.();
   }
 
   public onEvent(listener: VoiceManagerListener): void {
@@ -311,6 +329,17 @@ export class VoiceManager {
     }, options);
   }
 
+  public async transcribeAudio(
+    audio: Buffer,
+    options: SttOptions = {},
+  ): Promise<SttResult> {
+    return this.sttProvider.transcribe(audio, {
+      ...this.defaultSttOptions,
+      ...options,
+      timingTracker: options.timingTracker,
+    });
+  }
+
   public async processCapture(
     capture: VoiceCaptureResult,
     options: VoiceInteractionOptions = {},
@@ -330,6 +359,7 @@ export class VoiceManager {
 
     const abortController = new AbortController();
     const timingTracker = new TimingTracker();
+    this.resetInteractionMetrics();
     const task = this.runTextPipeline(
       userMessage,
       {
@@ -378,6 +408,7 @@ export class VoiceManager {
     }
 
     const abortController = new AbortController();
+    this.resetInteractionMetrics();
     const task = this.runPipeline(capture, options, abortController.signal);
     this.pipelineTask = task;
     this.pipelineAbortController = abortController;
@@ -394,6 +425,7 @@ export class VoiceManager {
 
   public async speak(text: string, options: TtsOptions = {}): Promise<Buffer> {
     this.setState('synthesizing');
+    this.resetInteractionMetrics();
 
     try {
       const processedResponse = this.responseProcessor.process(text);
@@ -631,6 +663,8 @@ export class VoiceManager {
     const sentenceAudioTasks: Array<Promise<Buffer>> = [];
     const responseChunks: string[] = [];
     let bufferedText = '';
+    let firstTokenEmitted = false;
+    let firstSentenceReadyEmitted = false;
 
     for await (const chunk of this.gateway.streamChat(userMessage, {
       signal,
@@ -645,12 +679,27 @@ export class VoiceManager {
       responseChunks.push(chunk.text);
       bufferedText += chunk.text;
 
-      const extracted = this.extractCompletedSentences(bufferedText);
+      if (!firstTokenEmitted) {
+        firstTokenEmitted = true;
+        this.emit({
+          type: 'first_token',
+          text: chunk.text,
+        });
+      }
+
+      const extracted = this.extractReadySpeechSegments(bufferedText);
 
       bufferedText = extracted.remainder;
 
       for (const sentence of extracted.sentences) {
         this.throwIfInterrupted(signal);
+        if (!firstSentenceReadyEmitted) {
+          firstSentenceReadyEmitted = true;
+          this.emit({
+            type: 'sentence_ready',
+            text: sentence,
+          });
+        }
         this.setState('synthesizing');
         sentenceAudioTasks.push(
           this.speakStreamingSentence(sentence, ttsOptions, signal, retryState),
@@ -662,6 +711,13 @@ export class VoiceManager {
 
     if (trailingSentence.length > 0) {
       this.throwIfInterrupted(signal);
+      if (!firstSentenceReadyEmitted) {
+        firstSentenceReadyEmitted = true;
+        this.emit({
+          type: 'sentence_ready',
+          text: trailingSentence,
+        });
+      }
       this.setState('synthesizing');
       sentenceAudioTasks.push(
         this.speakStreamingSentence(trailingSentence, ttsOptions, signal, retryState),
@@ -778,6 +834,14 @@ export class VoiceManager {
     sentence: ProcessedVoiceResponse['sentences'][number],
     options: TtsOptions,
   ): Promise<Buffer> {
+    if (!this.firstTtsRequestStartedEmitted) {
+      this.firstTtsRequestStartedEmitted = true;
+      this.emit({
+        type: 'tts_request_started',
+        text: sentence.text,
+      });
+    }
+
     if (
       this.ttsProvider.supportsStreaming &&
       this.ttsProvider.streamSynthesize !== undefined
@@ -831,74 +895,12 @@ export class VoiceManager {
     return this.synthesizeForPlayback(processedResponse, options, retryState);
   }
 
-  private extractCompletedSentences(
+  private extractReadySpeechSegments(
     text: string,
   ): { sentences: string[]; remainder: string } {
-    const sentences: string[] = [];
-    let startIndex = 0;
-    let index = 0;
-
-    while (index < text.length) {
-      const current = text[index];
-
-      if (
-        current !== '.' &&
-        current !== '!' &&
-        current !== '?'
-      ) {
-        index += 1;
-        continue;
-      }
-
-      let endIndex = index + 1;
-
-      while (
-        endIndex < text.length &&
-        this.isSentencePunctuation(text[endIndex] ?? '')
-      ) {
-        endIndex += 1;
-      }
-
-      while (
-        endIndex < text.length &&
-        this.isTrailingSentenceCloser(text[endIndex] ?? '')
-      ) {
-        endIndex += 1;
-      }
-
-      const nextCharacter = text[endIndex];
-
-      if (nextCharacter !== undefined && !/\s/u.test(nextCharacter)) {
-        index += 1;
-        continue;
-      }
-
-      const sentence = text.slice(startIndex, endIndex).trim();
-
-      if (sentence.length > 0) {
-        sentences.push(sentence);
-      }
-
-      while (endIndex < text.length && /\s/u.test(text[endIndex] ?? '')) {
-        endIndex += 1;
-      }
-
-      startIndex = endIndex;
-      index = endIndex;
-    }
-
-    return {
-      sentences,
-      remainder: text.slice(startIndex),
-    };
-  }
-
-  private isSentencePunctuation(value: string): boolean {
-    return value === '.' || value === '!' || value === '?';
-  }
-
-  private isTrailingSentenceCloser(value: string): boolean {
-    return value === '"' || value === '\'' || value === ')' || value === ']';
+    return this.speechSegmentationStrategy === 'conservative'
+      ? extractConservativeSpeechSegments(text)
+      : extractAggressiveSpeechSegments(text);
   }
 
   private createPrefetchedStream(
@@ -1022,6 +1024,14 @@ export class VoiceManager {
     }
 
     if (event.type === 'chunk' && event.chunk !== undefined) {
+      if (!this.firstTtsAudioReadyEmitted) {
+        this.firstTtsAudioReadyEmitted = true;
+        this.emit({
+          type: 'tts_first_audio_ready',
+          audio: event.chunk,
+        });
+      }
+
       this.emit({
         type: 'audio_chunk',
         audio: event.chunk,
@@ -1152,6 +1162,11 @@ export class VoiceManager {
     };
   }
 
+  private resetInteractionMetrics(): void {
+    this.firstTtsRequestStartedEmitted = false;
+    this.firstTtsAudioReadyEmitted = false;
+  }
+
   private flushTimingReportIfReady(): void {
     if (
       this.pipelineTask !== undefined ||
@@ -1184,4 +1199,155 @@ export class VoiceManager {
       throw error;
     }
   }
+}
+
+const EARLY_SPEECH_MIN_CHARS = 32;
+const EARLY_SPEECH_MIN_WORDS = 5;
+const EARLY_SPEECH_FORCE_CHARS = 48;
+
+export function extractConservativeSpeechSegments(
+  text: string,
+): { sentences: string[]; remainder: string } {
+  const sentences: string[] = [];
+  let startIndex = 0;
+  let index = 0;
+
+  while (index < text.length) {
+    const current = text[index];
+
+    if (
+      current !== '.' &&
+      current !== '!' &&
+      current !== '?'
+    ) {
+      index += 1;
+      continue;
+    }
+
+    let endIndex = index + 1;
+
+    while (
+      endIndex < text.length &&
+      isSentencePunctuation(text[endIndex] ?? '')
+    ) {
+      endIndex += 1;
+    }
+
+    while (
+      endIndex < text.length &&
+      isTrailingSentenceCloser(text[endIndex] ?? '')
+    ) {
+      endIndex += 1;
+    }
+
+    const nextCharacter = text[endIndex];
+
+    if (nextCharacter !== undefined && !/\s/u.test(nextCharacter)) {
+      index += 1;
+      continue;
+    }
+
+    const sentence = text.slice(startIndex, endIndex).trim();
+
+    if (sentence.length > 0) {
+      sentences.push(sentence);
+    }
+
+    while (endIndex < text.length && /\s/u.test(text[endIndex] ?? '')) {
+      endIndex += 1;
+    }
+
+    startIndex = endIndex;
+    index = endIndex;
+  }
+
+  return {
+    sentences,
+    remainder: text.slice(startIndex),
+  };
+}
+
+export function extractAggressiveSpeechSegments(
+  text: string,
+): { sentences: string[]; remainder: string } {
+  const conservative = extractConservativeSpeechSegments(text);
+
+  if (conservative.sentences.length > 0) {
+    return conservative;
+  }
+
+  const earlySplitIndex = findEarlySpeechSplitIndex(text);
+
+  if (earlySplitIndex === null) {
+    return conservative;
+  }
+
+  const sentence = text.slice(0, earlySplitIndex).trim();
+  const remainder = text.slice(earlySplitIndex).trimStart();
+
+  if (sentence.length === 0) {
+    return conservative;
+  }
+
+  return {
+    sentences: [sentence],
+    remainder,
+  };
+}
+
+function findEarlySpeechSplitIndex(text: string): number | null {
+  const trimmed = text.trim();
+
+  if (
+    trimmed.length < EARLY_SPEECH_MIN_CHARS ||
+    countWords(trimmed) < EARLY_SPEECH_MIN_WORDS
+  ) {
+    return null;
+  }
+
+  const clauseMatches = [...text.matchAll(/[,;:]\s+/gu)];
+
+  for (let index = clauseMatches.length - 1; index >= 0; index -= 1) {
+    const match = clauseMatches[index];
+
+    if (match === undefined) {
+      continue;
+    }
+
+    const candidateEnd = (match.index ?? -1) + 1;
+    const candidate = text.slice(0, candidateEnd).trim();
+
+    if (
+      candidate.length >= EARLY_SPEECH_MIN_CHARS &&
+      countWords(candidate) >= EARLY_SPEECH_MIN_WORDS
+    ) {
+      return candidateEnd;
+    }
+  }
+
+  const endsAtSoftBoundary = /[\s"'”’)\]]$/u.test(text);
+
+  if (!endsAtSoftBoundary && trimmed.length < EARLY_SPEECH_FORCE_CHARS) {
+    return null;
+  }
+
+  const trailingWhitespace = text.length - text.trimEnd().length;
+
+  return text.length - trailingWhitespace;
+}
+
+function countWords(text: string): number {
+  return text
+    .trim()
+    .split(/\s+/u)
+    .filter((part) => part.length > 0)
+    .length;
+}
+
+function isSentencePunctuation(value: string): boolean {
+  return value === '.' || value === '!' || value === '?';
+}
+
+function isTrailingSentenceCloser(value: string): boolean {
+  return value === '"' || value === '\'' || value === ')' || value === ']';
 }

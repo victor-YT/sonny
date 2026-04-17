@@ -2,6 +2,7 @@ import type { TtsOptions, TtsProvider } from './tts.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8001';
 const DEFAULT_SYNTHESIZE_PATH = '/synthesize';
+const DEFAULT_WARMUP_PATH = '/warmup';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 interface Qwen3TtsJsonResponse {
@@ -11,6 +12,7 @@ interface Qwen3TtsJsonResponse {
 export interface Qwen3TtsConfig {
   baseUrl?: string;
   synthesizePath?: string;
+  warmupPath?: string;
   timeoutMs?: number;
   headers?: Record<string, string>;
 }
@@ -21,6 +23,7 @@ export class Qwen3TTSProvider implements TtsProvider {
 
   private readonly baseUrl: string;
   private readonly synthesizePath: string;
+  private readonly warmupPath: string;
   private readonly timeoutMs: number;
   private readonly headers: Record<string, string>;
 
@@ -29,8 +32,26 @@ export class Qwen3TTSProvider implements TtsProvider {
     this.synthesizePath = this.normalizePath(
       config.synthesizePath ?? DEFAULT_SYNTHESIZE_PATH,
     );
+    this.warmupPath = this.normalizePath(
+      config.warmupPath ?? DEFAULT_WARMUP_PATH,
+    );
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.headers = config.headers ?? {};
+  }
+
+  public async warmup(): Promise<void> {
+    const response = await this.fetchWithTimeout(`${this.baseUrl}${this.warmupPath}`, {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.buildHttpError(response));
+    }
+
+    await response.arrayBuffer();
   }
 
   public async synthesize(
@@ -164,13 +185,23 @@ export class Qwen3TTSProvider implements TtsProvider {
     if (contentType.includes('application/json')) {
       const payload: unknown = await response.json();
       const data = this.parseJsonPayload(payload);
+      const audio = Buffer.from(data.audio, 'base64');
 
-      return Buffer.from(data.audio, 'base64');
+      if (audio.byteLength === 0) {
+        throw new Error('Qwen3-TTS response payload decoded to empty audio data');
+      }
+
+      return audio;
     }
 
     const audioBuffer = await response.arrayBuffer();
+    const audio = Buffer.from(audioBuffer);
 
-    return Buffer.from(audioBuffer);
+    if (audio.byteLength === 0) {
+      throw new Error('Qwen3-TTS response body was empty');
+    }
+
+    return audio;
   }
 
   private parseJsonPayload(payload: unknown): Qwen3TtsJsonResponse {

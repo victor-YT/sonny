@@ -5,6 +5,7 @@ export interface TtsProvider {
   synthesize(text: string, options?: TtsOptions): Promise<Buffer>;
   supportsStreaming: boolean;
   streamSynthesize?(text: string, options?: TtsOptions): AsyncIterable<Buffer>;
+  warmup?(): Promise<void>;
 }
 
 export interface TtsOptions {

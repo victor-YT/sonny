@@ -200,6 +200,14 @@ export class VoiceGateway {
     }
   }
 
+  public async startServices(): Promise<void> {
+    await this.startManagedServices();
+  }
+
+  public async stopServices(): Promise<void> {
+    await this.stopManagedServices();
+  }
+
   private resolveRuntimeConfig(
     config: VoiceGatewayConfig,
   ): RuntimeConfig | undefined {
@@ -288,6 +296,7 @@ export class VoiceGateway {
     return {
       name: baseProvider.name,
       supportsStreaming: baseProvider.supportsStreaming,
+      getLastDebugInfo: () => baseProvider.getLastDebugInfo?.() ?? null,
       transcribe: async (audio: Buffer, options: SttOptions = {}) => {
         options.timingTracker?.start('stt_transcription');
 

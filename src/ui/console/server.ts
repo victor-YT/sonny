@@ -76,6 +76,11 @@ export class ConsoleServer {
     await new Promise<void>((resolve, reject) => {
       activeServer.close((error) => {
         if (error !== undefined) {
+          if ('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING') {
+            resolve();
+            return;
+          }
+
           reject(error);
           return;
         }
