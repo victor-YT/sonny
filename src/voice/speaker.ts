@@ -42,6 +42,11 @@ export interface SpeakerConfig {
   platform?: RuntimePlatform;
 }
 
+export interface SpeakerPlaybackDiagnostics {
+  playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
+  playerCommand: string | null;
+}
+
 interface PlaybackItem {
   id: string;
   metadata?: StreamingAudioQueueItemMetadata;
@@ -51,6 +56,7 @@ interface PlaybackItem {
 interface PlayerInvocation {
   command: string;
   args: string[];
+  stdin?: 'pipe' | 'ignore';
 }
 
 export class Speaker {
@@ -70,6 +76,10 @@ export class Speaker {
   private currentProcess: ChildProcess | undefined;
   private currentTempDir: string | undefined;
   private currentItem: PlaybackItem | undefined;
+  private currentStreamingItemId: string | undefined;
+  private streamingPlaybackUnavailable = false;
+  private lastPlaybackMode: SpeakerPlaybackDiagnostics['playbackMode'] = 'unknown';
+  private lastPlayerCommand: string | null = null;
 
   public constructor(config: SpeakerConfig) {
     this.audioQueue = config.audioQueue;
@@ -105,6 +115,13 @@ export class Speaker {
     this.started = true;
     this.stopping = false;
     this.audioQueue.onEvent(this.queueListener);
+  }
+
+  public getPlaybackDiagnostics(): SpeakerPlaybackDiagnostics {
+    return {
+      playbackMode: this.lastPlaybackMode,
+      playerCommand: this.lastPlayerCommand,
+    };
   }
 
   public async stop(): Promise<void> {
@@ -161,6 +178,7 @@ export class Speaker {
         if (event.itemId !== undefined) {
           this.queuedChunks.set(event.itemId, []);
           this.itemMetadata.set(event.itemId, event.metadata);
+          this.currentStreamingItemId = event.itemId;
         }
         return;
       case 'chunk':
@@ -168,6 +186,21 @@ export class Speaker {
           const chunks = this.queuedChunks.get(event.itemId);
 
           chunks?.push(event.chunk);
+
+          if (
+            event.itemId === this.currentStreamingItemId &&
+            !this.streamingPlaybackUnavailable
+          ) {
+            const started = await this.writeStreamingChunk(
+              event.itemId,
+              event.metadata,
+              event.chunk,
+            );
+
+            if (started) {
+              return;
+            }
+          }
         }
         return;
       case 'item_completed':
@@ -177,6 +210,19 @@ export class Speaker {
 
           this.queuedChunks.delete(event.itemId);
           this.itemMetadata.delete(event.itemId);
+          if (
+            event.itemId === this.currentStreamingItemId &&
+            this.currentProcess !== undefined
+          ) {
+            try {
+              await this.finishStreamingPlayback(event.itemId, metadata);
+            } finally {
+              this.currentStreamingItemId = undefined;
+            }
+            return;
+          }
+
+          this.currentStreamingItemId = undefined;
           this.playbackQueue.push({
             id: event.itemId,
             metadata,
@@ -190,6 +236,9 @@ export class Speaker {
           this.queuedChunks.delete(event.itemId);
           this.itemMetadata.delete(event.itemId);
           this.removePendingPlayback(event.itemId);
+          if (this.currentStreamingItemId === event.itemId) {
+            this.currentStreamingItemId = undefined;
+          }
         }
         return;
       case 'error':
@@ -288,12 +337,158 @@ export class Speaker {
     }
   }
 
+  private async writeStreamingChunk(
+    itemId: string,
+    metadata: StreamingAudioQueueItemMetadata | undefined,
+    chunk: Buffer,
+  ): Promise<boolean> {
+    if (this.platform === 'win32') {
+      this.streamingPlaybackUnavailable = true;
+      return false;
+    }
+
+    if (this.currentProcess === undefined) {
+      try {
+        await this.spawnStreamingPlayer({
+          id: itemId,
+          metadata,
+          audio: Buffer.alloc(0),
+        });
+      } catch (error: unknown) {
+        if (this.isMissingCommandError(error)) {
+          this.streamingPlaybackUnavailable = true;
+          return false;
+        }
+
+        throw error;
+      }
+    }
+
+    if (this.currentProcess?.stdin === null || this.currentProcess?.stdin === undefined) {
+      this.streamingPlaybackUnavailable = true;
+      return false;
+    }
+
+    if (this.currentItem?.id !== itemId) {
+      return false;
+    }
+
+    if (this.state !== 'playing') {
+      this.currentItem = {
+        id: itemId,
+        metadata,
+        audio: Buffer.alloc(0),
+      };
+      this.setState('playing');
+      this.emit({
+        type: 'playback_started',
+        itemId,
+        metadata,
+      });
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      this.currentProcess?.stdin?.write(chunk, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
+    });
+
+    return true;
+  }
+
+  private async finishStreamingPlayback(
+    itemId: string,
+    metadata: StreamingAudioQueueItemMetadata | undefined,
+  ): Promise<void> {
+    const child = this.currentProcess;
+
+    if (child === undefined) {
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => {
+        if (this.stopping && signal === 'SIGTERM') {
+          resolve();
+          return;
+        }
+
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(
+          new Error(
+            `${child.spawnfile ?? 'player'} exited with code ${code ?? 'unknown'} and signal ${signal ?? 'none'}`,
+          ),
+        );
+      });
+      child.stdin?.end();
+    });
+
+    this.currentProcess = undefined;
+    this.currentItem = undefined;
+    this.emit({
+      type: 'playback_completed',
+      itemId,
+      metadata,
+    });
+  }
+
+  private async spawnStreamingPlayer(item: PlaybackItem): Promise<void> {
+    const invocations = this.resolveStreamingPlayerInvocations();
+    let missingCommandError: Error | undefined;
+
+    for (const invocation of invocations) {
+      try {
+        const child = spawn(invocation.command, invocation.args, {
+          stdio: ['pipe', 'ignore', 'ignore'],
+          windowsHide: true,
+        });
+
+        this.currentProcess = child;
+        this.currentItem = item;
+        this.lastPlaybackMode = 'streaming-stdin';
+        this.lastPlayerCommand = invocation.command;
+        this.setState('playing');
+        this.emit({
+          type: 'playback_started',
+          itemId: item.id,
+          metadata: item.metadata,
+        });
+        return;
+      } catch (error: unknown) {
+        if (this.isMissingCommandError(error)) {
+          missingCommandError = error;
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (missingCommandError !== undefined) {
+      throw missingCommandError;
+    }
+
+    throw new Error('No streaming audio player is available');
+  }
+
   private async runPlayer(audioPath: string): Promise<void> {
     const invocations = this.resolvePlayerInvocations(audioPath);
     let missingCommandError: Error | undefined;
 
     for (const invocation of invocations) {
       try {
+        this.lastPlaybackMode = 'file-fallback';
+        this.lastPlayerCommand = invocation.command;
         await this.spawnAndWait(invocation);
         return;
       } catch (error: unknown) {
@@ -393,6 +588,31 @@ export class Speaker {
             args: ['-nodisp', '-autoexit', '-loglevel', 'quiet', audioPath],
           },
         ];
+    }
+  }
+
+  private resolveStreamingPlayerInvocations(): PlayerInvocation[] {
+    if (this.playerCommand !== undefined) {
+      return [];
+    }
+
+    switch (this.platform) {
+      case 'darwin':
+      case 'linux':
+        return [
+          {
+            command: 'play',
+            args: ['-q', '-t', 'wav', '-'],
+            stdin: 'pipe',
+          },
+          {
+            command: 'ffplay',
+            args: ['-nodisp', '-autoexit', '-loglevel', 'quiet', '-i', 'pipe:0'],
+            stdin: 'pipe',
+          },
+        ];
+      default:
+        return [];
     }
   }
 

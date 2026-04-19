@@ -7,7 +7,7 @@
   "scripts": {
     "test": "pnpm run test:integration",
     "test:integration": "tsc -p tsconfig.test.json && node --test dist-test/tests/*.test.js",
-    "build": "tsc && tsc -p tsconfig.preload.json && pnpm run build:assets",
+    "build": "tsc && pnpm --dir console-web build && pnpm run build:assets",
     "build:assets": "node scripts/build-assets.cjs",
     "dev": "pnpm run dev:full",
     "dev:app": "pnpm run build && pnpm run start:electron",
@@ -20,6 +20,8 @@
     "start:electron": "electron dist/ui/electron-entry.js",
     "start:text": "node dist/index.js",
     "start": "pnpm run build && pnpm run start:electron",
+    "voice:file": "pnpm run build && node dist/dev/voice-file.js",
+    "voice:simulate": "pnpm run voice:file",
     "voice:latency": "pnpm run build && node dist/dev/voice-latency-benchmark.js",
     "voice:smoke": "pnpm run build && node dist/dev/voice-smoke.js",
     "lint": "eslint src/"

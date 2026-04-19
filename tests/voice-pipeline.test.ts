@@ -323,7 +323,7 @@ test('ChatterboxProvider yields streamed audio chunks from the TTS service', asy
 
   const server = await startServer(async (request, response) => {
     assert.equal(request.method, 'POST');
-    assert.equal(request.url, '/synthesize');
+    assert.equal(request.url, '/synthesize/stream');
 
     const payload = await readJsonBody(request);
 

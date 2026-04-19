@@ -36,7 +36,9 @@ export type VoiceManagerState =
 export type VoiceManagerEventType =
   | 'state_changed'
   | 'wake_word_detected'
+  | 'transcription_partial'
   | 'first_token'
+  | 'response_partial'
   | 'sentence_ready'
   | 'tts_request_started'
   | 'tts_first_audio_ready'
@@ -628,6 +630,10 @@ export class VoiceManager {
         options,
       )) {
         latestResult = result;
+        this.emit({
+          type: 'transcription_partial',
+          text: result.text,
+        });
       }
 
       if (latestResult !== undefined) {
@@ -663,6 +669,7 @@ export class VoiceManager {
     const sentenceAudioTasks: Array<Promise<Buffer>> = [];
     const responseChunks: string[] = [];
     let bufferedText = '';
+    let partialResponse = '';
     let firstTokenEmitted = false;
     let firstSentenceReadyEmitted = false;
 
@@ -678,6 +685,12 @@ export class VoiceManager {
 
       responseChunks.push(chunk.text);
       bufferedText += chunk.text;
+      partialResponse += chunk.text;
+
+      this.emit({
+        type: 'response_partial',
+        text: partialResponse,
+      });
 
       if (!firstTokenEmitted) {
         firstTokenEmitted = true;

@@ -49,7 +49,9 @@ export interface RuntimeStateSnapshot {
   currentState: SonnyRuntimeState;
   updatedAt: string;
   lastError: string | null;
+  userPartialTranscript: string | null;
   lastTranscript: string | null;
+  assistantPartialResponse: string | null;
   lastResponseText: string | null;
   currentSessionId: string | null;
   micActive: boolean;
@@ -107,7 +109,9 @@ export class RuntimeStateStore {
       currentState: 'idle',
       updatedAt: this.nowIso(),
       lastError: null,
+      userPartialTranscript: null,
       lastTranscript: null,
+      assistantPartialResponse: null,
       lastResponseText: null,
       currentSessionId: config.currentSessionId ?? null,
       micActive: false,
@@ -214,6 +218,7 @@ export class RuntimeStateStore {
     this.conversation.push(turn);
     this.trimConversation();
     this.patchSnapshot({
+      userPartialTranscript: null,
       lastTranscript: normalized,
       lastError: null,
     });
@@ -245,6 +250,7 @@ export class RuntimeStateStore {
     }
 
     this.patchSnapshot({
+      assistantPartialResponse: null,
       lastResponseText: normalized,
       lastError: null,
     });
@@ -295,6 +301,30 @@ export class RuntimeStateStore {
     this.emit({
       type: 'conversation',
       turn: { ...turn },
+    });
+  }
+
+  public setUserPartialTranscript(transcript: string | null): void {
+    const normalized = transcript?.trim() ?? null;
+
+    if (this.snapshot.userPartialTranscript === normalized) {
+      return;
+    }
+
+    this.patchSnapshot({
+      userPartialTranscript: normalized,
+    });
+  }
+
+  public setAssistantPartialResponse(text: string | null): void {
+    const normalized = text?.trim() ?? null;
+
+    if (this.snapshot.assistantPartialResponse === normalized) {
+      return;
+    }
+
+    this.patchSnapshot({
+      assistantPartialResponse: normalized,
     });
   }
 
@@ -396,7 +426,9 @@ export class RuntimeStateStore {
     this.patchSnapshot({
       currentState: 'idle',
       lastError: null,
+      userPartialTranscript: null,
       micActive: false,
+      assistantPartialResponse: null,
       playbackActive: false,
     });
   }

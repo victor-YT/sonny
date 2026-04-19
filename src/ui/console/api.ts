@@ -50,6 +50,7 @@ export interface ConsoleApiConfig {
     | 'testTts'
     | 'replayLastTts'
     | 'retranscribeLastAudio'
+    | 'runSampleVoiceTurn'
     | 'interruptPlayback'
     | 'refreshHealth'
     | 'resetToIdle'
@@ -80,6 +81,10 @@ interface VoiceSettingsUpdateBody {
 interface TestTtsBody {
   text: string;
   voice?: string;
+}
+
+interface SampleTurnBody {
+  path?: string;
 }
 
 type PersonalityUpdateBody = Partial<PersonalityConfig>;
@@ -196,6 +201,20 @@ export function createConsoleApiRuntime(
       response.json({
         status: 'ok',
         result,
+      });
+    }),
+  );
+
+  router.post(
+    '/runtime/sample-turn',
+    createAsyncHandler(async (request, response) => {
+      assertVoiceRuntime(config.voiceRuntime);
+      const payload = parseSampleTurnBody(request.body);
+      const result = await config.voiceRuntime.runSampleVoiceTurn(payload.path);
+      response.json({
+        status: 'ok',
+        result,
+        state: readRuntimeState(config.runtimeState),
       });
     }),
   );
@@ -665,6 +684,23 @@ function parseTestTtsBody(body: unknown): TestTtsBody {
   };
 }
 
+function parseSampleTurnBody(body: unknown): SampleTurnBody {
+  if (body === undefined || body === null || body === '') {
+    return {};
+  }
+
+  if (!isRecord(body)) {
+    throw new Error('Sample turn body must be an object');
+  }
+
+  return {
+    path:
+      typeof body.path === 'string' && body.path.trim().length > 0
+        ? body.path.trim()
+        : undefined,
+  };
+}
+
 function parseMemoryFileParam(value: unknown): MemoryDocumentName {
   if (typeof value !== 'string') {
     throw new Error('Memory file parameter must be a string');
@@ -722,7 +758,9 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
     currentState: 'idle',
     updatedAt: new Date().toISOString(),
     lastError: null,
+    userPartialTranscript: null,
     lastTranscript: null,
+    assistantPartialResponse: null,
     lastResponseText: null,
     currentSessionId: null,
     micActive: false,

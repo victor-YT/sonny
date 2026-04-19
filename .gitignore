@@ -7,6 +7,8 @@ release/
 .env.*
 !.env.example
 *.log
+tmp/
+src/ui/console/public/
 .DS_Store
 __pycache__/
 *.py[cod]

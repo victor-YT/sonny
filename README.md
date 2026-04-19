@@ -18,16 +18,41 @@ Sonny is built around a different assumption:
 
 The goal is not “yet another chat UI.” The goal is a personal AI runtime you can own, inspect, extend, and trust.
 
+## 🚀 Quick Demo (No Microphone Required)
+
+If you want to validate Sonny’s current voice stack without speaking into the mic:
+
+```bash
+pnpm voice:simulate
+```
+
+That runs the existing voice pipeline through a local sample path:
+
+- STT
+- LLM
+- TTS
+- playback
+
+It works without live microphone input and prints transcript output, latency fields, and pipeline verdicts for a full sample turn.
+
 ## Feature Overview
 
-- Local-first chat via Ollama
-- Persistent multi-layer memory using Markdown and SQLite
-- Voice loop with wake word, STT, TTS, and speaker playback
+### Available now
+
+- Local-first runtime via Ollama
+- Streaming voice pipeline with STT, LLM, TTS, and speaker playback
 - Emotion-aware response processing for speech
-- Electron menubar UI and capsule overlay
-- Localhost control panel on port `3000`
+- Minimal tray host
+- Localhost control center on port `3000`
+- Diagnostics and latency instrumentation
+- No-microphone simulation path for pipeline validation
 - Built-in tool/skill system with permission levels
+
+### In progress / planned
+
+- Wake word voice flow
 - Proactive web monitoring and notifications
+- Richer multi-layer memory system
 - Community-extensible skill registry
 
 ## Sonny vs OpenClaw
@@ -40,7 +65,7 @@ This is a positioning comparison, not a benchmark shootout. The point is to expl
 | Memory model | Conversation-centric | Durable user memory plus recent recall |
 | Personality | Usually prompt-level | Explicit personality and voice shaping |
 | Voice | Optional or external depending on setup | Built into the architecture |
-| UI | Primarily chat-oriented | CLI, menubar UI, capsule overlay, localhost console |
+| UI | Primarily chat-oriented | Tray host plus localhost control center |
 | Proactive behavior | Limited by default | Web monitors, schedules, notifications |
 | Extensibility | Agent/tool oriented | Built-in skills with runtime permission controls |
 | Security posture | Varies by deployment | Allowlists, permission levels, sandboxed execution path |
@@ -52,9 +77,9 @@ The main pieces are:
 
 - `src/core/`: gateway, session state, config, proactive runtime, notifications
 - `src/memory/`: long-term Markdown memory, recent SQLite memory, extraction/injection
-- `src/voice/`: wake word, microphone, STT, TTS, speaker playback, response shaping
+- `src/voice/`: microphone, STT, TTS, speaker playback, response shaping, voice runtime orchestration
 - `src/skills/`: built-in tool skills, permissions, monitor registry, web monitor
-- `src/ui/`: menubar app, tray, capsule overlay, localhost console
+- `src/ui/`: tray host, Electron entrypoint, localhost control center
 
 ## Setup Guide
 
@@ -73,8 +98,8 @@ Install these first:
 
 Optional, but required for specific flows:
 
-- a Picovoice Porcupine access key for wake-word voice mode
-- Electron-compatible desktop environment for the menubar UI
+- a Picovoice Porcupine access key only if you are working on wake-word flows
+- Electron-compatible desktop environment for the tray host
 - enough local CPU/GPU/RAM for `faster-whisper` and Qwen3-TTS
 
 On macOS with Homebrew:
@@ -137,10 +162,10 @@ Important values:
 
 - `OLLAMA_MODEL`: model name for chat generation
 - `OLLAMA_BASE_URL`: Ollama HTTP endpoint
-- `PORCUPINE_ACCESS_KEY`: required only for wake-word voice mode
+- `PORCUPINE_ACCESS_KEY`: required only for wake-word experiments
 - `FASTER_WHISPER_URL`: STT service URL
 - `CHATTERBOX_URL`: TTS service URL
-- `SONNY_VOICE_MODE`: `0`/`false` for text mode, `1`/`true` for voice mode
+- `SONNY_VOICE_MODE`: `0`/`false` for non-voice startup, `1`/`true` for voice runtime startup
 
 `config/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and `.local/` for machine-local runtime data.
 
@@ -151,7 +176,7 @@ Sonny expects two local HTTP services for voice mode:
 - faster-whisper on `http://127.0.0.1:8000`
 - Qwen3-TTS on `http://127.0.0.1:8001`
 
-The runtime still uses the compatibility name `CHATTERBOX_URL` for the TTS endpoint, but the bundled server script is [`scripts/qwen3-tts-server.py`](/Users/yt/Documents/sde_learn/projects/sonny/scripts/qwen3-tts-server.py).
+The runtime still uses the compatibility name `CHATTERBOX_URL` for the TTS endpoint, but the bundled server script is `scripts/qwen3-tts-server.py`.
 
 #### STT: faster-whisper
 
@@ -210,30 +235,34 @@ Build first:
 pnpm build
 ```
 
-#### Text mode
-
-Text mode is the default:
+The main interface is the localhost control center:
 
 ```bash
 pnpm start
 ```
 
-You will get a terminal prompt:
+That starts:
+
+- the Sonny runtime
+- the localhost control center
+- the minimal tray host
+
+The primary UI is:
 
 ```text
->
+http://127.0.0.1:3000
 ```
 
-Type messages directly. While Sonny is running it also starts the localhost diagnostics console and prints the URL, usually `http://127.0.0.1:3000`.
+Sonny prints the control center URL on startup. The terminal is no longer the primary interaction surface.
 
 #### Voice mode setup
 
 Before starting voice mode:
 
 1. Set `SONNY_VOICE_MODE=1` in `.env`.
-2. Set a real `PORCUPINE_ACCESS_KEY`.
-3. Start faster-whisper and Qwen3-TTS.
-4. Verify `FASTER_WHISPER_URL` and `CHATTERBOX_URL` match the services you started.
+2. Start faster-whisper and Qwen3-TTS.
+3. Verify `FASTER_WHISPER_URL` and `CHATTERBOX_URL` match the services you started.
+4. Open the localhost control center.
 
 Then start Sonny normally:
 
@@ -243,8 +272,8 @@ pnpm start
 
 In voice mode Sonny:
 
-1. listens for the wake word
-2. captures microphone audio
+1. runs the voice runtime locally
+2. accepts manual or simulated voice turns through the control center
 3. transcribes with faster-whisper
 4. generates a response with the gateway
 5. reshapes the response for speech
@@ -262,22 +291,18 @@ Optional voice-related environment overrides supported by `src/voice/voice-gatew
 - `SONNY_MIC_MAX_CAPTURE_MS`
 - `SONNY_MIC_RECORD_PROGRAM`
 
-#### Menubar mode
+#### Desktop host behavior
 
-After building, launch the Electron menubar app with:
+`pnpm start` launches Sonny’s Electron shell as a minimal tray host. It does not open a separate popup chat window.
 
-```bash
-node dist/ui/main.js
-```
+The tray remains useful for presence and quick access:
 
-It provides tray presence, a panel conversation view, a capsule status overlay, and voice-state-driven UI updates.
+- tray status reflects runtime state
+- clicking the tray opens the localhost control center in the default browser
 
 ### Keyboard Shortcuts
 
-- Terminal mode: `Ctrl+C` stops Sonny
-- Terminal mode: `exit` or `quit` closes the text session
-- Panel composer: `Cmd+Enter` or `Ctrl+Enter` sends the current message
-- Panel composer: `Enter` inserts a newline
+- `Ctrl+C` stops Sonny from the terminal that launched it
 
 ### Integration Tests
 
@@ -287,19 +312,19 @@ The repo now includes integration coverage for voice service connectivity and th
 pnpm test
 ```
 
-That compiles `src/` plus `tests/` with [`tsconfig.test.json`](/Users/yt/Documents/sde_learn/projects/sonny/tsconfig.test.json) and runs:
+That compiles `src/` plus `tests/` with `tsconfig.test.json` and runs:
 
-- [`tests/voice-pipeline.test.ts`](/Users/yt/Documents/sde_learn/projects/sonny/tests/voice-pipeline.test.ts)
-- [`tests/gateway.test.ts`](/Users/yt/Documents/sde_learn/projects/sonny/tests/gateway.test.ts)
+- `tests/voice-pipeline.test.ts`
+- `tests/gateway.test.ts`
 
 ### Troubleshooting
 
 - Startup validation fails: copy `.env.example` to `.env` and fill in the missing values called out in the error message.
 - Ollama requests fail: make sure `ollama serve` is running and `OLLAMA_BASE_URL` matches it.
 - Voice mode starts but STT/TTS calls fail: confirm the local services are running on `8000` and `8001`, or update `FASTER_WHISPER_URL` and `CHATTERBOX_URL`.
-- TTS server exits immediately: install `fastapi`, `uvicorn`, `numpy`, `torch`, and `qwen-tts` in the Python environment used to launch [`scripts/qwen3-tts-server.py`](/Users/yt/Documents/sde_learn/projects/sonny/scripts/qwen3-tts-server.py).
+- TTS server exits immediately: install `fastapi`, `uvicorn`, `numpy`, `torch`, and `qwen-tts` in the Python environment used to launch `scripts/qwen3-tts-server.py`.
 - Microphone capture fails with a missing module error: Sonny loads `node-record-lpcm16` at runtime. Install it with `pnpm add node-record-lpcm16` if your environment does not already provide it.
-- Wake word never triggers: verify `PORCUPINE_ACCESS_KEY`, check your microphone permissions, and lower `SONNY_WAKE_WORD_SENSITIVITY` only if you are getting false positives rather than misses.
+- Wake-word experiments never trigger: verify `PORCUPINE_ACCESS_KEY`, check your microphone permissions, and lower `SONNY_WAKE_WORD_SENSITIVITY` only if you are getting false positives rather than misses.
 - No local playback: confirm `sox` is installed and that macOS can run `afplay`.
 
 ## Memory System
@@ -432,7 +457,7 @@ Contributions are welcome, but keep the project’s design bar in mind.
 - new skills
 - memory quality improvements
 - safer permission handling
-- UI polish for the menubar and console
+- UI polish for the tray host and control center
 - voice stability and streaming improvements
 - documentation and onboarding
 

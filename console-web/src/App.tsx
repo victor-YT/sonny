@@ -1,0 +1,1342 @@
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Activity,
+  AlertTriangle,
+  AudioLines,
+  Bot,
+  CircleDot,
+  LoaderCircle,
+  Mic,
+  RefreshCcw,
+  RotateCcw,
+  Square,
+  Volume2,
+  Waves,
+} from 'lucide-react'
+
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
+import {
+  buildLastAudioDebug,
+  buildPipelineDebug,
+  buildRecorderDebug,
+  buildSttDebug,
+  compareServicePriority,
+  describeNotice,
+  formatDateTime,
+  formatDuration,
+  formatLogMeta,
+  formatOffsetFromStop,
+  formatState,
+  normalizeStateClass,
+  shouldDimService,
+  type ConnectionState,
+  type ConversationTurn,
+  type LastAudioDebugInfo,
+  type NoticeState,
+  type PipelineDebugInfo,
+  type RecorderDebugInfo,
+  type RuntimeLogEntry,
+  type RuntimeSnapshot,
+  type VoiceSettingsPayload,
+} from '@/lib/control-center'
+
+type DiagnosticsTab =
+  | 'conversation'
+  | 'events'
+  | 'pipeline'
+  | 'stt'
+  | 'recorder'
+  | 'audio'
+
+interface ControlState {
+  snapshot: RuntimeSnapshot | null
+  logs: RuntimeLogEntry[]
+  conversation: ConversationTurn[]
+  voiceSettings: VoiceSettingsPayload | null
+  lastAudio: LastAudioDebugInfo | null
+  pipeline: PipelineDebugInfo | null
+  recorder: RecorderDebugInfo | null
+}
+
+interface StateEventPayload {
+  type: 'snapshot' | 'log' | 'conversation'
+  snapshot?: RuntimeSnapshot
+  entry?: RuntimeLogEntry
+  turn?: ConversationTurn
+}
+
+const DEBUG_REFRESH_TYPES = new Set([
+  'manual_listen_started',
+  'manual_listen_stopped',
+  'recording_started',
+  'silence_detected',
+  'recording_backend_detected',
+  'recording_backend_missing',
+  'recording_spawn_started',
+  'recording_spawn_failed',
+  'recording_stderr',
+  'recording_first_chunk_received',
+  'recording_start_timeout',
+  'recording_start_failed',
+  'recording_stopped',
+  'recording_saved',
+  'recording_format_warning',
+  'stt_started',
+  'stt_first_chunk',
+  'stt_finished',
+  'stt_failed',
+  'gateway_started',
+  'gateway_first_token',
+  'gateway_first_sentence_ready',
+  'gateway_finished',
+  'gateway_failed',
+  'tts_started',
+  'tts_request_started',
+  'tts_first_audio_ready',
+  'tts_finished',
+  'tts_failed',
+  'tts_warmup_started',
+  'tts_warmup_finished',
+  'tts_warmup_failed',
+  'playback_started',
+  'playback_finished',
+  'playback_interrupted',
+  'voice_pipeline_completed',
+  'voice_pipeline_failed',
+  'runtime_reset',
+  'stt_retranscribe_started',
+  'stt_retranscribe_finished',
+  'stt_retranscribe_failed',
+])
+
+const FLOW_STEPS = [
+  { key: 'stopListeningAt', label: 'Stop' },
+  { key: 'sttFinishedAt', label: 'STT' },
+  { key: 'firstTokenAt', label: '1st Token' },
+  { key: 'firstSentenceReadyAt', label: '1st Sentence' },
+  { key: 'ttsFirstAudioReadyAt', label: '1st Audio' },
+  { key: 'playbackStartedAt', label: '1st Sound' },
+  { key: 'playbackFinishedAt', label: 'Done' },
+] as const
+
+function App() {
+  const [controlState, setControlState] = useState<ControlState>({
+    snapshot: null,
+    logs: [],
+    conversation: [],
+    voiceSettings: null,
+    lastAudio: null,
+    pipeline: null,
+    recorder: null,
+  })
+  const [activeTab, setActiveTab] = useState<DiagnosticsTab>('conversation')
+  const [connection, setConnection] = useState<ConnectionState>('connected')
+  const [notice, setNotice] = useState<NoticeState>({
+    level: 'info',
+    message: 'Runtime stream connected. Waiting for the latest snapshot.',
+  })
+  const [ttsInput, setTtsInput] = useState(
+    'Sonny runtime online. Voice pipeline standing by.',
+  )
+  const [selectedVoice, setSelectedVoice] = useState('')
+  const [sampleAudioPath, setSampleAudioPath] = useState('')
+  const [sampleTurnRunning, setSampleTurnRunning] = useState(false)
+  const [developerToolsOpen, setDeveloperToolsOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function initialize() {
+      try {
+        const [snapshot, logs, conversation, voiceSettings, debugState] =
+          await Promise.all([
+            requestJson<RuntimeSnapshot>('/api/runtime/state'),
+            requestJson<{ logs: RuntimeLogEntry[] }>('/api/runtime/logs'),
+            requestJson<{ conversation: ConversationTurn[] }>(
+              '/api/runtime/conversation',
+            ),
+            requestJson<VoiceSettingsPayload>('/api/voice-settings'),
+            loadDebugState(),
+          ])
+
+        if (cancelled) {
+          return
+        }
+
+        setControlState({
+          snapshot,
+          logs: logs.logs ?? [],
+          conversation: conversation.conversation ?? [],
+          voiceSettings,
+          lastAudio: debugState.lastAudio,
+          pipeline: debugState.pipeline,
+          recorder: debugState.recorder,
+        })
+        setSelectedVoice(voiceSettings.settings.voiceModel)
+        setConnection('connected')
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setNotice({
+          level: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    void initialize()
+
+    const source = new EventSource('/api/runtime/events')
+
+    source.onopen = () => {
+      if (!cancelled) {
+        setConnection('connected')
+      }
+    }
+
+    source.onerror = () => {
+      if (!cancelled) {
+        setConnection('disconnected')
+      }
+    }
+
+    source.onmessage = (message) => {
+      if (cancelled) {
+        return
+      }
+
+      const payload = JSON.parse(message.data) as StateEventPayload
+
+      if (payload.type === 'snapshot' && payload.snapshot) {
+        setControlState((previous) => ({
+          ...previous,
+          snapshot: payload.snapshot ?? previous.snapshot,
+        }))
+        return
+      }
+
+      if (payload.type === 'log' && payload.entry) {
+        setControlState((previous) => ({
+          ...previous,
+          logs: upsertById(previous.logs, payload.entry!, 300),
+        }))
+
+        if (DEBUG_REFRESH_TYPES.has(payload.entry.type)) {
+          void refreshDebugState()
+        }
+
+        return
+      }
+
+      if (payload.type === 'conversation' && payload.turn) {
+        setControlState((previous) => ({
+          ...previous,
+          conversation: upsertById(previous.conversation, payload.turn!, 80),
+        }))
+      }
+    }
+
+    async function refreshDebugState() {
+      try {
+        const debugState = await loadDebugState()
+
+        if (cancelled) {
+          return
+        }
+
+        setControlState((previous) => ({
+          ...previous,
+          lastAudio: debugState.lastAudio,
+          pipeline: debugState.pipeline,
+          recorder: debugState.recorder,
+        }))
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setNotice({
+          level: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    return () => {
+      cancelled = true
+      source.close()
+    }
+  }, [])
+
+  useEffect(() => {
+    setNotice(describeNotice(controlState.snapshot, connection))
+  }, [controlState.snapshot, connection])
+
+  const runtimeClass = useMemo(() => {
+    return controlState.snapshot ? normalizeStateClass(controlState.snapshot) : 'idle'
+  }, [controlState.snapshot])
+
+  const voiceModel = controlState.voiceSettings?.settings.voiceModel ?? selectedVoice
+  const services = useMemo(() => {
+    if (controlState.snapshot === null) {
+      return []
+    }
+
+    return Object.values(controlState.snapshot.services).sort((left, right) => {
+      return compareServicePriority(left) - compareServicePriority(right)
+    })
+  }, [controlState.snapshot])
+
+  const pipelineDebugText = useMemo(() => {
+    return buildPipelineDebug(controlState.pipeline)
+  }, [controlState.pipeline])
+
+  const sttDebugText = useMemo(() => {
+    return buildSttDebug(controlState.pipeline)
+  }, [controlState.pipeline])
+
+  const recorderDebugText = useMemo(() => {
+    return buildRecorderDebug(controlState.recorder)
+  }, [controlState.recorder])
+
+  const lastAudioText = useMemo(() => {
+    return buildLastAudioDebug(controlState.lastAudio)
+  }, [controlState.lastAudio])
+
+  const sessionText = controlState.snapshot?.currentSessionId
+    ? `Session ${controlState.snapshot.currentSessionId}`
+    : 'Session none'
+
+  const canReplayAudio = controlState.lastAudio?.exists === true
+  const canReplayTts =
+    ((controlState.snapshot?.lastResponseText ?? '').trim().length > 0) || canReplayAudio
+
+  async function refreshAll() {
+    const [snapshot, logs, conversation, debugState] = await Promise.all([
+      requestJson<RuntimeSnapshot>('/api/runtime/state'),
+      requestJson<{ logs: RuntimeLogEntry[] }>('/api/runtime/logs'),
+      requestJson<{ conversation: ConversationTurn[] }>('/api/runtime/conversation'),
+      loadDebugState(),
+    ])
+
+    setControlState((previous) => ({
+      ...previous,
+      snapshot,
+      logs: logs.logs ?? [],
+      conversation: conversation.conversation ?? [],
+      lastAudio: debugState.lastAudio,
+      pipeline: debugState.pipeline,
+      recorder: debugState.recorder,
+    }))
+  }
+
+  async function handlePost(path: string, body?: unknown) {
+    try {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers:
+          body === undefined
+            ? undefined
+            : {
+                'content-type': 'application/json',
+              },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        throw await toRequestError(response)
+      }
+
+      await refreshAll()
+    } catch (error) {
+      await Promise.allSettled([refreshAll()])
+      setNotice({
+        level: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  async function handleReplayLastRecording() {
+    if (!canReplayAudio) {
+      setNotice({
+        level: 'error',
+        message: 'No saved manual recording is available to replay.',
+      })
+      return
+    }
+
+    try {
+      const audio = new Audio(`/api/runtime/debug/last-audio/file?ts=${Date.now()}`)
+      await audio.play()
+      setNotice({
+        level: 'info',
+        message: 'Playing the latest saved recording.',
+      })
+    } catch (error) {
+      setNotice({
+        level: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  async function handleRetranscribeLastAudio() {
+    try {
+      const response = await fetch('/api/runtime/debug/retranscribe-last-audio', {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw await toRequestError(response)
+      }
+
+      const payload = (await response.json()) as {
+        result?: { transcript?: string | null; transcriptLength?: number | null }
+      }
+
+      await refreshAll()
+
+      const preview = payload.result?.transcript
+        ? ` Transcript: ${payload.result.transcript.slice(0, 120)}`
+        : ''
+
+      setNotice({
+        level: 'info',
+        message: `Re-ran STT on the latest recording. Transcript length: ${String(
+          payload.result?.transcriptLength ?? 'Unknown',
+        )}.${preview}`,
+      })
+    } catch (error) {
+      await Promise.allSettled([refreshAll()])
+      setNotice({
+        level: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  async function handleRunSampleVoiceTurn() {
+    try {
+      setSampleTurnRunning(true)
+      await handlePost('/api/runtime/sample-turn', {
+        path: sampleAudioPath.trim().length > 0 ? sampleAudioPath.trim() : undefined,
+      })
+      setNotice({
+        level: 'info',
+        message: 'Sample voice turn started. Watch the transcript, response, and diagnostics update live.',
+      })
+    } finally {
+      setSampleTurnRunning(false)
+    }
+  }
+
+  const transcriptNote = controlState.pipeline?.verdict.sttPartials
+    ? 'Streaming partials detected'
+    : controlState.snapshot?.lastTranscript
+      ? 'Final transcript only'
+      : 'Waiting for transcript'
+
+  const responseNote = controlState.pipeline?.verdict.llmStreaming
+    ? 'Streaming response detected'
+    : controlState.snapshot?.lastResponseText
+      ? 'Final response only'
+      : 'Waiting for response'
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="border-b">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="text-base font-medium">Sonny</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant={connection === 'connected' ? 'secondary' : 'outline'}
+              >
+                <Activity />
+                {connection === 'connected' ? 'Connected' : 'Disconnected'}
+              </Badge>
+              <Badge variant={runtimeBadgeVariant(runtimeClass)}>
+                <CircleDot />
+                {formatState(controlState.snapshot?.currentState ?? 'idle')}
+              </Badge>
+              <Badge variant="outline">{sessionText}</Badge>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            {notice.level === 'error' ? (
+              <AlertTriangle className="size-4 shrink-0" />
+            ) : (
+              <LoaderCircle className="size-4 shrink-0" />
+            )}
+            <span>{notice.message}</span>
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto flex max-w-7xl flex-col gap-16 px-6 py-10">
+        <section className="grid gap-12 xl:grid-cols-[minmax(0,2.2fr)_320px] xl:items-start">
+          <div className="flex min-h-[72vh] items-center justify-center">
+            <Card className="w-full max-w-4xl border-0 bg-transparent shadow-none">
+              <CardContent className="flex flex-col items-center gap-12 px-0 py-0 text-center">
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Manual voice interaction
+                  </p>
+                  <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+                    Talk to Sonny
+                  </h1>
+                  <p className="mx-auto max-w-2xl text-base text-muted-foreground">
+                    Start listening, speak naturally, and pause. Sonny will stop the
+                    turn automatically, transcribe live, and answer back.
+                  </p>
+                </div>
+
+                <Button
+                  size="lg"
+                  className="h-14 min-w-72 px-8 text-base"
+                  variant={
+                    controlState.snapshot?.micActive === true ? 'outline' : 'default'
+                  }
+                  onClick={() =>
+                    void handlePost(
+                      controlState.snapshot?.micActive === true
+                        ? '/api/voice/listen/stop'
+                        : '/api/voice/listen/start',
+                    )
+                  }
+                >
+                  {controlState.snapshot?.micActive === true ? (
+                    <>
+                      <Square />
+                      Stop Listening
+                    </>
+                  ) : (
+                    <>
+                      <Mic />
+                      Start Listening
+                    </>
+                  )}
+                </Button>
+
+                <div className="grid w-full gap-6 md:grid-cols-2">
+                  <ConversationPreviewCard
+                    title="You"
+                    note={transcriptNote}
+                    value={
+                      controlState.snapshot?.userPartialTranscript ??
+                      controlState.snapshot?.lastTranscript ??
+                      'No transcript yet. Start listening and speak a short phrase.'
+                    }
+                  />
+                  <ConversationPreviewCard
+                    title="Sonny"
+                    note={responseNote}
+                    value={
+                      controlState.snapshot?.assistantPartialResponse ??
+                      controlState.snapshot?.lastResponseText ??
+                      'No response yet. Once the pipeline completes, the latest reply appears here.'
+                    }
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <aside className="space-y-6">
+            <Card>
+              <CardHeader className="p-6">
+                <CardTitle>Runtime</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5 p-6 pt-0">
+                <div className="space-y-3">
+                  <Badge variant={runtimeBadgeVariant(runtimeClass)}>
+                    <CircleDot />
+                    {formatState(controlState.snapshot?.currentState ?? 'idle')}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-3">
+                  <StatusRow
+                    label="Mic"
+                    value={controlState.snapshot?.micActive ? 'Active' : 'Idle'}
+                  />
+                  <StatusRow
+                    label="Playback"
+                    value={
+                      controlState.snapshot?.playbackActive ? 'Playing' : 'Idle'
+                    }
+                  />
+                  <StatusRow
+                    label="Connection"
+                    value={connection === 'connected' ? 'Live' : 'Offline'}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <p className="text-sm font-medium">Voice Stack</p>
+                  <div className="space-y-2">
+                    {services.length === 0 ? (
+                      <EmptyState message="No service health snapshot yet. Refresh health or wait for the runtime to publish one." />
+                    ) : (
+                      services.map((service) => (
+                        <ServiceHealthRow key={service.label} service={service} />
+                      ))
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </aside>
+        </section>
+
+        <section className="space-y-4">
+          <Card className="bg-muted/20">
+            <CardHeader className="flex flex-row items-center justify-between p-4">
+              <div className="space-y-1">
+                <CardTitle className="text-base">Developer Tools</CardTitle>
+                <CardDescription>
+                  Debug controls, traces, and raw pipeline output.
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeveloperToolsOpen((previous) => !previous)}
+              >
+                {developerToolsOpen ? 'Hide' : 'Show'}
+              </Button>
+            </CardHeader>
+          </Card>
+
+          {developerToolsOpen ? (
+            <div className="space-y-4">
+              <Card className="bg-muted/20">
+                <CardHeader className="p-4">
+                  <CardTitle className="text-sm">Developer Actions</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 p-4 pt-0">
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Sample Voice Turn</p>
+                    <Input
+                      value={sampleAudioPath}
+                      onChange={(event) => setSampleAudioPath(event.target.value)}
+                      placeholder="Optional WAV path. Leave empty to use SONNY_SAMPLE_AUDIO_PATH or default sample."
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleRunSampleVoiceTurn()}
+                      disabled={sampleTurnRunning}
+                    >
+                      <Mic />
+                      {sampleTurnRunning ? 'Running Sample Turn...' : 'Run Sample Voice Turn'}
+                    </Button>
+                  </div>
+
+                  <Separator />
+
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                    <Input
+                      value={ttsInput}
+                      onChange={(event) => setTtsInput(event.target.value)}
+                      placeholder="Type text for a quick playback check"
+                    />
+                    <Select
+                      value={selectedVoice || voiceModel}
+                      onValueChange={setSelectedVoice}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Voice" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={voiceModel || 'default'}>
+                          {voiceModel || 'default'}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void handlePost('/api/voice/tts/test', {
+                          text: ttsInput,
+                          voice: selectedVoice || voiceModel,
+                        })
+                      }
+                    >
+                      <AudioLines />
+                      Test TTS
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handlePost('/api/voice/tts/replay')}
+                      disabled={!canReplayTts}
+                    >
+                      <Volume2 />
+                      Replay TTS
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleReplayLastRecording()}
+                      disabled={!canReplayAudio}
+                    >
+                      <Waves />
+                      Replay Audio
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleRetranscribeLastAudio()}
+                      disabled={!canReplayAudio}
+                    >
+                      <Bot />
+                      Re-run STT
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handlePost('/api/runtime/health/refresh')}
+                    >
+                      <RefreshCcw />
+                      Refresh
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        void handlePost('/api/voice/playback/interrupt')
+                      }
+                      disabled={controlState.snapshot?.playbackActive !== true}
+                    >
+                      <Volume2 />
+                      Interrupt
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handlePost('/api/runtime/reset')}
+                    >
+                      <RotateCcw />
+                      Reset
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handlePost('/api/runtime/logs/clear')}
+                    >
+                      <AlertTriangle />
+                      Clear Logs
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Last Error</p>
+                    <div className="rounded-lg bg-background/60 p-3">
+                      <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+                        {controlState.snapshot?.lastError ??
+                          'No error. Runtime path is clean.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Pipeline Verdict</p>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      <VerdictItem
+                        label="STT partials"
+                        value={controlState.pipeline?.verdict.sttPartials ?? false}
+                      />
+                      <VerdictItem
+                        label="Transcript final"
+                        value={controlState.pipeline?.verdict.transcriptFinal ?? false}
+                      />
+                      <VerdictItem
+                        label="LLM streaming"
+                        value={controlState.pipeline?.verdict.llmStreaming ?? false}
+                      />
+                      <VerdictItem
+                        label="TTS streaming"
+                        value={controlState.pipeline?.verdict.ttsStreamingPath ?? false}
+                      />
+                      <VerdictItem
+                        label="Playback started"
+                        value={controlState.pipeline?.verdict.playbackStarted ?? false}
+                      />
+                      <VerdictTextItem
+                        label="Playback mode"
+                        value={controlState.pipeline?.verdict.playbackMode ?? 'unknown'}
+                      />
+                      <VerdictTextItem
+                        label="Player command"
+                        value={controlState.pipeline?.playerCommand ?? 'unknown'}
+                      />
+                      <VerdictItem
+                        label="Full turn success"
+                        value={controlState.pipeline?.verdict.fullTurnSuccess ?? false}
+                      />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Tabs
+                value={activeTab}
+                onValueChange={(value) => setActiveTab(value as DiagnosticsTab)}
+                className="gap-4"
+              >
+                <div className="space-y-1">
+                  <h2 className="text-base font-medium">Diagnostics</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Conversation history, event logs, and low-level pipeline output.
+                  </p>
+                </div>
+
+                <TabsList
+                  variant="line"
+                  className="flex h-auto w-full flex-wrap justify-start"
+                >
+                  <TabsTrigger value="conversation">Conversation</TabsTrigger>
+                  <TabsTrigger value="events">Event Log</TabsTrigger>
+                  <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
+                  <TabsTrigger value="stt">STT Debug</TabsTrigger>
+                  <TabsTrigger value="recorder">Recorder Debug</TabsTrigger>
+                  <TabsTrigger value="audio">Last Audio</TabsTrigger>
+                </TabsList>
+
+                <Card className="bg-muted/20">
+                  <CardContent className="p-4">
+                    <TabsContent value="conversation" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">Conversation Preview</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Latest voice turns from the runtime.
+                        </p>
+                      </div>
+                      <ScrollArea className="h-[440px]">
+                        <div className="space-y-3 pr-4">
+                          {controlState.conversation.length === 0 ? (
+                            <EmptyState message="No voice turns yet. Start listening, speak naturally, and pause to inspect the latest exchange." />
+                          ) : (
+                            controlState.conversation
+                              .slice()
+                              .reverse()
+                              .map((turn) => (
+                                <Card key={turn.id}>
+                                  <CardContent className="space-y-4 pt-6">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <Badge variant="outline">{turn.status}</Badge>
+                                      <span className="text-sm text-muted-foreground">
+                                        {formatDateTime(turn.timestamp)}
+                                      </span>
+                                    </div>
+                                    <Card size="sm">
+                                      <CardHeader>
+                                        <CardTitle className="text-base">User</CardTitle>
+                                      </CardHeader>
+                                      <CardContent>
+                                        <p className="text-sm whitespace-pre-wrap">
+                                          {turn.userTranscript ?? '(none)'}
+                                        </p>
+                                      </CardContent>
+                                    </Card>
+                                    <Card size="sm">
+                                      <CardHeader>
+                                        <CardTitle className="text-base">
+                                          Assistant
+                                        </CardTitle>
+                                      </CardHeader>
+                                      <CardContent>
+                                        <p className="text-sm whitespace-pre-wrap">
+                                          {turn.assistantText ?? '(pending)'}
+                                        </p>
+                                      </CardContent>
+                                    </Card>
+                                  </CardContent>
+                                </Card>
+                              ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value="events" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">Event Log</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Runtime events streamed from the orchestrator.
+                        </p>
+                      </div>
+                      <ScrollArea className="h-[440px]">
+                        <div className="space-y-3 pr-4">
+                          {controlState.logs.length === 0 ? (
+                            <EmptyState message="No events yet. The live runtime stream will place orchestration events here as they happen." />
+                          ) : (
+                            controlState.logs
+                              .slice()
+                              .reverse()
+                              .map((entry) => (
+                                <Card key={entry.id}>
+                                  <CardContent className="space-y-3 pt-6">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <Badge
+                                        variant={
+                                          entry.level === 'error'
+                                            ? 'destructive'
+                                            : 'outline'
+                                        }
+                                      >
+                                        {entry.type}
+                                      </Badge>
+                                      <span className="text-sm text-muted-foreground">
+                                        {formatDateTime(entry.timestamp)}
+                                      </span>
+                                    </div>
+                                    <p className="text-sm text-muted-foreground">
+                                      {entry.message}
+                                    </p>
+                                    <DebugOutput
+                                      value={formatLogMeta(entry.meta)}
+                                      heightClassName="h-24"
+                                    />
+                                  </CardContent>
+                                </Card>
+                              ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value="pipeline" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">Pipeline</h3>
+                        <p className="text-sm text-muted-foreground">
+                          End-to-end timing from stop listening to playback completion.
+                        </p>
+                      </div>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Flow</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <PipelineFlow pipeline={controlState.pipeline} />
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Latency Metrics</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <LatencyGrid pipeline={controlState.pipeline} />
+                        </CardContent>
+                      </Card>
+                      <DebugSection
+                        title="Pipeline Debug"
+                        value={pipelineDebugText}
+                        heightClassName="h-[340px]"
+                      />
+                    </TabsContent>
+
+                    <TabsContent value="stt" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">STT Debug</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Transcript length, failure reason, and raw body preview.
+                        </p>
+                      </div>
+                      <DebugSection
+                        title="Latest STT Run"
+                        value={sttDebugText}
+                        heightClassName="h-[480px]"
+                      />
+                    </TabsContent>
+
+                    <TabsContent value="recorder" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">Recorder Debug</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Backend selection, spawn state, and recorder diagnostics.
+                        </p>
+                      </div>
+                      <DebugSection
+                        title="Latest Recorder Run"
+                        value={recorderDebugText}
+                        heightClassName="h-[480px]"
+                      />
+                    </TabsContent>
+
+                    <TabsContent value="audio" className="space-y-4">
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-medium">Last Audio</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Metadata and quality hints for the latest saved recording.
+                        </p>
+                      </div>
+                      <DebugSection
+                        title="Latest Recording"
+                        value={lastAudioText}
+                        heightClassName="h-[480px]"
+                      />
+                    </TabsContent>
+                  </CardContent>
+                </Card>
+              </Tabs>
+            </div>
+          ) : null}
+        </section>
+      </main>
+    </div>
+  )
+}
+
+function ConversationPreviewCard({
+  title,
+  note,
+  value,
+}: {
+  title: string
+  note: string
+  value: string
+}) {
+  return (
+    <div className="rounded-xl bg-muted/40 p-6 text-left">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground">{note}</p>
+      </div>
+      <p className="text-sm whitespace-pre-wrap text-muted-foreground">{value}</p>
+    </div>
+  )
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <Alert>
+      <AlertTriangle />
+      <AlertTitle>No data yet</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  )
+}
+
+function StatusRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className="text-sm font-medium">{value}</span>
+    </div>
+  )
+}
+
+function VerdictItem({ label, value }: { label: string; value: boolean }) {
+  return (
+    <div className="rounded-lg bg-background/60 px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium">{value ? 'yes' : 'no'}</p>
+    </div>
+  )
+}
+
+function VerdictTextItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background/60 px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium break-all">{value}</p>
+    </div>
+  )
+}
+
+function ServiceHealthRow({
+  service,
+}: {
+  service: RuntimeSnapshot['services'][string]
+}) {
+  return (
+    <div
+      className={cn(
+        'space-y-1 py-2',
+        shouldDimService(service) && 'opacity-60',
+      )}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={cn(
+              'size-2.5 rounded-full',
+              service.online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+            )}
+          />
+          <span className="text-sm font-medium">{service.label}</span>
+        </div>
+        <span className="text-xs text-muted-foreground">{service.online ? '●' : '○'}</span>
+      </div>
+    </div>
+  )
+}
+
+function DebugSection({
+  title,
+  value,
+  heightClassName,
+}: {
+  title: string
+  value: string
+  heightClassName: string
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <DebugOutput value={value} heightClassName={heightClassName} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function DebugOutput({
+  value,
+  heightClassName,
+}: {
+  value: string
+  heightClassName: string
+}) {
+  return (
+    <ScrollArea className={cn('rounded-md border', heightClassName)}>
+      <pre className="p-4 text-sm whitespace-pre-wrap">{value}</pre>
+    </ScrollArea>
+  )
+}
+
+function PipelineFlow({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
+  if (pipeline === null) {
+    return (
+      <EmptyState message="No pipeline timeline yet. Run a manual voice turn to populate the flow." />
+    )
+  }
+
+  const hasError = [
+    pipeline.recording,
+    pipeline.stt,
+    pipeline.gateway,
+    pipeline.tts,
+    pipeline.playback,
+  ].some((stage) => stage.status === 'failed')
+  const activeStep = resolveActiveFlowStepKey(pipeline)
+
+  return (
+    <div className="grid gap-4 md:grid-cols-7">
+      {FLOW_STEPS.map((step, index) => {
+        const hasTimestamp = pipeline.latency.timestamps[step.key] !== null
+        const isRunning = activeStep === step.key && !hasTimestamp && !hasError
+        const isError = !hasTimestamp && hasError
+
+        return (
+          <div key={step.key} className="space-y-3">
+            <div className="flex items-center gap-3">
+              {index > 0 ? <Separator className="flex-1" /> : <div className="flex-1" />}
+              <div
+                className={cn(
+                  'size-3 rounded-full border bg-background',
+                  hasTimestamp && 'bg-primary border-primary',
+                  isRunning && 'ring-4 ring-ring/30',
+                  isError && 'border-destructive bg-destructive',
+                )}
+              />
+              {index < FLOW_STEPS.length - 1 ? (
+                <Separator className="flex-1" />
+              ) : (
+                <div className="flex-1" />
+              )}
+            </div>
+            <div className="space-y-1 text-center">
+              <p className="text-sm font-medium">{step.label}</p>
+              <p className="text-sm text-muted-foreground">
+                {formatOffsetFromStop(
+                  pipeline.latency.timestamps.stopListeningAt,
+                  pipeline.latency.timestamps[step.key],
+                )}
+              </p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function LatencyGrid({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
+  if (pipeline === null) {
+    return (
+      <EmptyState message="No latency metrics yet. They appear after a full voice turn starts moving through the pipeline." />
+    )
+  }
+
+  const metrics = [
+    ['STT', pipeline.latency.durations.sttLatencyMs],
+    ['Gateway to 1st Token', pipeline.latency.durations.gatewayToFirstTokenMs],
+    [
+      'Gateway to 1st Sentence',
+      pipeline.latency.durations.gatewayToFirstSentenceMs,
+    ],
+    ['TTS to 1st Audio', pipeline.latency.durations.ttsToFirstAudioMs],
+    ['TTS Full', pipeline.latency.durations.ttsFullSynthesisMs],
+    ['Stop to 1st Sound', pipeline.latency.durations.stopToFirstSoundMs],
+    [
+      'Stop to Playback Done',
+      pipeline.latency.durations.stopToPlaybackFinishedMs,
+    ],
+  ] as const
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {metrics.map(([label, value]) => (
+        <Card key={label}>
+          <CardHeader>
+            <CardTitle className="text-base">{label}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold">{formatDuration(value)}</p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+function runtimeBadgeVariant(
+  runtimeClass: string,
+): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (runtimeClass === 'error') {
+    return 'destructive'
+  }
+
+  if (runtimeClass === 'idle') {
+    return 'outline'
+  }
+
+  return 'secondary'
+}
+
+function resolveActiveFlowStepKey(
+  pipeline: PipelineDebugInfo,
+): (typeof FLOW_STEPS)[number]['key'] | null {
+  if (pipeline.playback.status === 'running') {
+    return 'playbackFinishedAt'
+  }
+
+  if (pipeline.tts.status === 'running') {
+    return pipeline.latency.timestamps.ttsFirstAudioReadyAt === null
+      ? 'ttsFirstAudioReadyAt'
+      : 'playbackStartedAt'
+  }
+
+  if (pipeline.gateway.status === 'running') {
+    if (pipeline.latency.timestamps.firstTokenAt === null) {
+      return 'firstTokenAt'
+    }
+
+    return 'firstSentenceReadyAt'
+  }
+
+  if (pipeline.stt.status === 'running') {
+    return 'sttFinishedAt'
+  }
+
+  return null
+}
+
+async function loadDebugState(): Promise<{
+  lastAudio: LastAudioDebugInfo
+  pipeline: PipelineDebugInfo
+  recorder: RecorderDebugInfo
+}> {
+  const [lastAudio, pipeline, recorder] = await Promise.all([
+    requestJson<LastAudioDebugInfo>('/api/runtime/debug/last-audio'),
+    requestJson<PipelineDebugInfo>('/api/runtime/debug/pipeline'),
+    requestJson<RecorderDebugInfo>('/api/runtime/debug/recorder'),
+  ])
+
+  return {
+    lastAudio,
+    pipeline,
+    recorder,
+  }
+}
+
+async function requestJson<T>(path: string): Promise<T> {
+  const response = await fetch(path)
+
+  if (!response.ok) {
+    throw await toRequestError(response)
+  }
+
+  return (await response.json()) as T
+}
+
+async function toRequestError(response: Response): Promise<Error> {
+  try {
+    const payload = (await response.json()) as { error?: string }
+    return new Error(payload.error ?? `Request failed: ${response.status}`)
+  } catch {
+    return new Error(`Request failed: ${response.status}`)
+  }
+}
+
+function upsertById<T extends { id: number }>(
+  items: T[],
+  value: T,
+  limit: number,
+): T[] {
+  const next = items.slice()
+  const index = next.findIndex((entry) => entry.id === value.id)
+
+  if (index >= 0) {
+    next[index] = value
+  } else {
+    next.push(value)
+  }
+
+  if (next.length > limit) {
+    next.splice(0, next.length - limit)
+  }
+
+  return next
+}
+
+export default App

@@ -15,8 +15,10 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
 
   runtimeState.transition('listening');
   runtimeState.setMicActive(true);
+  runtimeState.setUserPartialTranscript('hello');
   runtimeState.setLastTranscript('hello sonny');
   runtimeState.transition('thinking');
+  runtimeState.setAssistantPartialResponse('pipeline');
   runtimeState.setLastResponseText('pipeline nominal');
   runtimeState.setPlaybackActive(true);
   runtimeState.setServiceHealth('ollama', {
@@ -30,7 +32,9 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
   assert.equal(snapshot.currentState, 'thinking');
   assert.equal(snapshot.micActive, true);
   assert.equal(snapshot.playbackActive, true);
+  assert.equal(snapshot.userPartialTranscript, null);
   assert.equal(snapshot.lastTranscript, 'hello sonny');
+  assert.equal(snapshot.assistantPartialResponse, null);
   assert.equal(snapshot.lastResponseText, 'pipeline nominal');
   assert.equal(snapshot.currentSessionId, 'session-1');
   assert.equal(snapshot.services.ollama.online, true);

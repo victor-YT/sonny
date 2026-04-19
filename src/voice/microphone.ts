@@ -14,8 +14,13 @@ const DEFAULT_RECORD_PROGRAM = process.platform === 'darwin' ? 'ffmpeg' : 'sox';
 const DEFAULT_VAD_URL = 'http://127.0.0.1:8003';
 const DEFAULT_VAD_POLL_MS = 100;
 const DEFAULT_SPEECH_THRESHOLD_MS = 500;
-const DEFAULT_SILENCE_THRESHOLD_MS = 1_500;
+const DEFAULT_SILENCE_THRESHOLD_MS = 800;
 const MIN_CAPTURE_BYTES = 10_240;
+
+export interface MicrophoneCaptureOptions {
+  signal?: AbortSignal;
+  onSilenceDetected?: () => void;
+}
 
 export interface MicrophoneConfig {
   sampleRateHertz?: number;
@@ -34,6 +39,7 @@ export class Microphone {
   private readonly maxCaptureMs: number;
   private readonly recordProgram: string;
   private readonly vadUrl: string;
+  private readonly silenceThresholdMs: number;
 
   public constructor(config: MicrophoneConfig = {}) {
     this.sampleRateHertz = config.sampleRateHertz ?? DEFAULT_SAMPLE_RATE_HERTZ;
@@ -41,14 +47,18 @@ export class Microphone {
     this.maxCaptureMs = config.maxCaptureMs ?? DEFAULT_MAX_CAPTURE_MS;
     this.recordProgram = config.recordProgram ?? DEFAULT_RECORD_PROGRAM;
     this.vadUrl = config.vadUrl ?? DEFAULT_VAD_URL;
+    this.silenceThresholdMs = Math.max(
+      DEFAULT_VAD_POLL_MS,
+      Math.round((config.silenceSeconds ?? DEFAULT_SILENCE_THRESHOLD_MS / 1000) * 1000),
+    );
   }
 
-  public async capture(): Promise<VoiceCaptureResult> {
+  public async capture(options: MicrophoneCaptureOptions = {}): Promise<VoiceCaptureResult> {
     const timingTracker = new TimingTracker();
     timingTracker.start('vad_detection');
 
     if (this.shouldUseFfmpeg()) {
-      const audioPromise = this.recordWithFfmpeg(timingTracker);
+      const audioPromise = this.recordWithFfmpeg(timingTracker, options.signal);
 
       return {
         audioPromise,
@@ -62,7 +72,7 @@ export class Microphone {
     }
 
     const audioStream = new BufferAsyncIterable();
-    const audioPromise = this.recordWithVad(audioStream, timingTracker);
+    const audioPromise = this.recordWithVad(audioStream, timingTracker, options);
 
     return {
       audioStream,
@@ -81,7 +91,10 @@ export class Microphone {
     return process.platform === 'darwin' && this.recordProgram === 'ffmpeg';
   }
 
-  private async recordWithFfmpeg(timingTracker: TimingTracker): Promise<Buffer> {
+  private async recordWithFfmpeg(
+    timingTracker: TimingTracker,
+    signal?: AbortSignal,
+  ): Promise<Buffer> {
     const input = await this.resolveMacOsAudioInput();
     const outputPath = join(tmpdir(), `sonny-mic-${randomUUID()}.wav`);
     const durationSeconds = Math.max(1, Math.ceil(this.maxCaptureMs / 1000));
@@ -118,12 +131,26 @@ export class Microphone {
         appendLogLines(stderrLines, data.toString('utf8'));
       });
 
+      const handleAbort = (): void => {
+        child.kill('SIGTERM');
+      };
+
+      signal?.addEventListener('abort', handleAbort, { once: true });
+
       child.on('error', async (err: Error) => {
         await this.cleanupFile(outputPath);
         reject(new Error(`Failed to start ffmpeg: ${err.message}`));
       });
 
       child.on('close', async (code: number | null) => {
+        signal?.removeEventListener('abort', handleAbort);
+
+        if (signal?.aborted) {
+          await this.cleanupFile(outputPath);
+          reject(new Error('Microphone capture aborted'));
+          return;
+        }
+
         if (code !== null && code !== 0) {
           await this.cleanupFile(outputPath);
           reject(new Error(
@@ -155,6 +182,7 @@ export class Microphone {
   private recordWithVad(
     audioStream: BufferAsyncIterable,
     timingTracker: TimingTracker,
+    options: MicrophoneCaptureOptions,
   ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       let child: ChildProcess;
@@ -185,6 +213,7 @@ export class Microphone {
         audioStream,
         sourceName: 'sox',
         timingTracker,
+        options,
         resolve,
         reject,
       });
@@ -196,6 +225,7 @@ export class Microphone {
     audioStream: BufferAsyncIterable;
     sourceName: string;
     timingTracker: TimingTracker;
+    options: MicrophoneCaptureOptions;
     resolve: (value: Buffer) => void;
     reject: (reason?: unknown) => void;
   }): void {
@@ -204,6 +234,7 @@ export class Microphone {
       audioStream,
       sourceName,
       timingTracker,
+      options,
       resolve,
       reject,
     } = config;
@@ -215,6 +246,7 @@ export class Microphone {
     let silenceMs = 0;
     const vadUrl = `${this.vadUrl}/detect`;
     let vadBusy = false;
+    let silenceDetected = false;
 
     const killChild = (): void => {
       try {
@@ -263,6 +295,14 @@ export class Microphone {
       }
     }, this.maxCaptureMs + 1000);
 
+    const handleAbort = (): void => {
+      clearTimeout(maxTimeout);
+      killChild();
+      finish(new Error('Microphone capture aborted'));
+    };
+
+    options.signal?.addEventListener('abort', handleAbort, { once: true });
+
     const checkVad = async (pcmChunk: Buffer): Promise<void> => {
       if (vadBusy || settled) {
         return;
@@ -294,7 +334,11 @@ export class Microphone {
         } else if (speechStarted) {
           silenceMs += DEFAULT_VAD_POLL_MS;
 
-          if (silenceMs >= DEFAULT_SILENCE_THRESHOLD_MS) {
+          if (silenceMs >= this.silenceThresholdMs) {
+            if (!silenceDetected) {
+              silenceDetected = true;
+              options.onSilenceDetected?.();
+            }
             stopRecording();
           }
         }
@@ -345,11 +389,13 @@ export class Microphone {
 
     child.on('error', (err: Error) => {
       clearTimeout(maxTimeout);
+      options.signal?.removeEventListener('abort', handleAbort);
       finish(new Error(`Failed to start ${sourceName}: ${err.message}`));
     });
 
     child.on('close', (code: number | null) => {
       clearTimeout(maxTimeout);
+      options.signal?.removeEventListener('abort', handleAbort);
 
       if (settled) {
         return;

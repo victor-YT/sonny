@@ -16,7 +16,7 @@ import numpy as np
 import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 LOGGER = logging.getLogger("qwen3-tts-server")
@@ -73,6 +73,39 @@ class Qwen3TTSService:
             return self._model
 
     def synthesize(self, request: SynthesizeRequest) -> bytes:
+        chunks, sample_rate = self._generate_audio_chunks(request)
+        audio = np.concatenate(chunks)
+
+        if audio.ndim > 1:
+            audio = audio.reshape(-1)
+
+        buffer = io.BytesIO()
+        sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
+
+        return buffer.getvalue()
+
+    def stream_synthesize(self, request: SynthesizeRequest):
+        header_sent = False
+        sample_rate: int | None = None
+
+        chunks, sample_rate = self._generate_audio_chunks(request)
+
+        for chunk in chunks:
+            if not header_sent:
+                yield build_streaming_wav_header(sample_rate=sample_rate)
+                header_sent = True
+
+            clipped = np.clip(chunk, -1.0, 1.0)
+            pcm = (clipped * np.int16(32767)).astype(np.int16)
+            yield pcm.tobytes()
+
+        if not header_sent:
+            raise RuntimeError("Model did not return any audio")
+
+    def _generate_audio_chunks(
+        self,
+        request: SynthesizeRequest,
+    ) -> tuple[list[np.ndarray], int]:
         model = self.ensure_model()
         instruct = self._build_instruction(
             emotion=request.emotion,
@@ -112,15 +145,7 @@ class Qwen3TTSService:
         if not chunks or sample_rate is None:
             raise RuntimeError("Model did not return any audio")
 
-        audio = np.concatenate(chunks)
-
-        if audio.ndim > 1:
-            audio = audio.reshape(-1)
-
-        buffer = io.BytesIO()
-        sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
-
-        return buffer.getvalue()
+        return chunks, sample_rate
 
     def _build_instruction(self, emotion: str, exaggeration: float) -> str:
         normalized_emotion = emotion.strip().lower()
@@ -232,6 +257,62 @@ async def synthesize(request: SynthesizeRequest) -> Response:
         content=wav_bytes,
         media_type="audio/wav",
     )
+
+
+@app.post("/synthesize/stream")
+async def synthesize_stream(request: SynthesizeRequest) -> StreamingResponse:
+    try:
+        stream = service.stream_synthesize(request)
+    except Exception as error:
+        LOGGER.exception("Streaming synthesis setup failed")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    return StreamingResponse(
+        iterate_stream(stream),
+        media_type="audio/wav",
+    )
+
+
+async def iterate_stream(stream):
+    iterator = iter(stream)
+
+    while True:
+      try:
+          chunk = await asyncio.to_thread(next, iterator)
+      except StopIteration:
+          return
+      except Exception as error:
+          LOGGER.exception("Streaming synthesis failed")
+          raise HTTPException(status_code=500, detail=str(error)) from error
+
+      yield chunk
+
+
+def build_streaming_wav_header(
+    sample_rate: int,
+    channels: int = 1,
+    bits_per_sample: int = 16,
+) -> bytes:
+    byte_rate = sample_rate * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
+    unknown_length = 0xFFFFFFFF
+    header = bytearray(44)
+
+    header[0:4] = b"RIFF"
+    header[4:8] = unknown_length.to_bytes(4, "little", signed=False)
+    header[8:12] = b"WAVE"
+    header[12:16] = b"fmt "
+    header[16:20] = (16).to_bytes(4, "little", signed=False)
+    header[20:22] = (1).to_bytes(2, "little", signed=False)
+    header[22:24] = channels.to_bytes(2, "little", signed=False)
+    header[24:28] = sample_rate.to_bytes(4, "little", signed=False)
+    header[28:32] = byte_rate.to_bytes(4, "little", signed=False)
+    header[32:34] = block_align.to_bytes(2, "little", signed=False)
+    header[34:36] = bits_per_sample.to_bytes(2, "little", signed=False)
+    header[36:40] = b"data"
+    header[40:44] = unknown_length.to_bytes(4, "little", signed=False)
+
+    return bytes(header)
 
 
 def main() -> None:

@@ -1,27 +1,12 @@
-import { app, ipcMain } from 'electron';
-import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Menubar } from 'menubar';
+import { app, shell, type Tray } from 'electron';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import type { Gateway } from '../core/gateway.js';
-import type { LlmMessage } from '../core/providers/llm.js';
-import type {
-  RuntimeStateStore,
-  SonnyRuntimeState,
-} from '../core/runtime-state.js';
-import type { VoiceManager, VoiceManagerEvent, VoiceManagerState } from '../voice/voice-manager.js';
-import { CapsuleWindow } from './capsule.js';
+import type { RuntimeStateStore, SonnyRuntimeState } from '../core/runtime-state.js';
 import { TrayController } from './tray.js';
 
-const PANEL_WINDOW_WIDTH = 360;
-const PANEL_WINDOW_HEIGHT = 520;
 const TOOLTIP = 'Sonny';
-const MAX_CONVERSATION_ENTRIES = 24;
-const DEFAULT_SYSTEM_PROMPT =
-  'You are Sonny, a local-first assistant with TARS energy: concise, pragmatic, and mildly unimpressed by avoidable mistakes. Give direct answers, make clear recommendations, and keep the jokes dry enough to pass for diagnostics. Prefer useful action over ceremony. If a request is vague, pin it down fast and move.';
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 let activeUiMainApp: UiMainApp | undefined;
 
 console.log(
@@ -33,212 +18,64 @@ export interface UiMainStatusSnapshot {
   lastUpdatedAt: number;
 }
 
-export interface UiConversationEntry {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-}
-
-export interface UiVoiceModeSnapshot {
-  enabled: boolean;
-  available: boolean;
-}
-
 export interface UiMainAppConfig {
-  gateway?: Gateway;
+  controlCenterUrl?: string;
   runtimeState?: Pick<RuntimeStateStore, 'getSnapshot' | 'subscribe'>;
 }
 
 export class UiMainApp {
-  private readonly preloadPath: string;
-  private readonly panelUrl: string;
   private readonly trayController: TrayController;
-  private readonly capsuleWindow: CapsuleWindow;
-  private readonly conversation: UiConversationEntry[] = [];
-  private menubarApp: Menubar | undefined;
-  private status: UiMainStatusSnapshot;
-  private voiceMode: UiVoiceModeSnapshot = {
-    enabled: false,
-    available: false,
-  };
-  private gateway: Gateway | undefined;
+  private readonly controlCenterUrl: string | undefined;
   private readonly runtimeState: UiMainAppConfig['runtimeState'];
-  private gatewayPromise: Promise<Gateway> | undefined;
-  private boundVoiceManager: VoiceManager | undefined;
-  private voiceManagerListener:
-    | ((event: VoiceManagerEvent) => void)
-    | undefined;
+  private tray: Tray | undefined;
+  private status: UiMainStatusSnapshot;
   private runtimeStateDetach: (() => void) | undefined;
   private stopping = false;
-  private ipcRegistered = false;
 
   public constructor(config: UiMainAppConfig = {}) {
-    this.preloadPath = join(__dirname, 'preload.js');
-    this.panelUrl = this.resolvePanelUrl();
-    this.gateway = config.gateway;
+    this.controlCenterUrl = config.controlCenterUrl;
     this.runtimeState = config.runtimeState;
     this.trayController = new TrayController({
       tooltip: TOOLTIP,
     });
-    this.capsuleWindow = new CapsuleWindow();
     this.status = this.toInitialStatus();
   }
 
-  public async start(): Promise<Menubar> {
-    try {
-      console.log('[ui.main] before app.whenReady()');
-      app.once('ready', () => {
-        console.log('[ui.main] inside app ready callback');
-      });
+  public async start(): Promise<Tray> {
+    console.log('[ui.main] before app.whenReady()');
+    await app.whenReady();
+    console.log('[ui.main] app.whenReady() resolved');
+    app.setName('Sonny');
+    app.dock?.hide();
 
-      await app.whenReady();
-      console.log('[ui.main] app.whenReady() resolved');
-      app.dock?.hide();
-      console.log('[ui.main] app.dock.hide() called after ready');
-
-      if (this.menubarApp !== undefined) {
-        console.log('[ui.main] menubar already created');
-        return this.menubarApp;
-      }
-
-      this.registerIpc();
-      this.menubarApp = await this.createMenubar();
-      console.log('[ui.main] menubar instance created');
-      this.attachRuntimeState();
-      void this.initializeGateway();
-
-      return this.menubarApp;
-    } catch (error: unknown) {
-      console.error('[ui.main] startup failed', error);
-      throw error;
+    if (this.tray !== undefined) {
+      console.log('[ui.main] tray already created');
+      return this.tray;
     }
+
+    this.registerAppLifecycle();
+    this.tray = this.trayController.create();
+    this.attachTrayBehavior(this.tray);
+    this.attachRuntimeState();
+    this.trayController.setStatus(this.status.status);
+
+    console.log(
+      `[ui.main] tray ready controlCenterUrl=${this.controlCenterUrl ?? 'unavailable'}`,
+    );
+
+    return this.tray;
   }
 
   public async stop(): Promise<void> {
-    if (this.menubarApp === undefined) {
-      return;
-    }
-
     this.stopping = true;
-    ipcMain.removeHandler('ui:get-status');
-    ipcMain.removeHandler('ui:set-status');
-    ipcMain.removeHandler('ui:get-voice-mode');
-    ipcMain.removeHandler('ui:toggle-voice-mode');
-    ipcMain.removeHandler('ui:toggle-panel');
-    ipcMain.removeHandler('ui:show-capsule');
-    ipcMain.removeHandler('ui:hide-capsule');
-    ipcMain.removeHandler('gateway:list-conversation');
-    ipcMain.removeHandler('gateway:send-message');
     this.runtimeStateDetach?.();
-    this.capsuleWindow.destroy();
-    this.gateway?.close();
-
+    this.runtimeStateDetach = undefined;
+    this.tray?.destroy();
+    this.tray = undefined;
     app.quit();
   }
 
-  public bindVoiceManager(voiceManager: VoiceManager): void {
-    if (
-      this.boundVoiceManager !== undefined &&
-      this.voiceManagerListener !== undefined
-    ) {
-      this.boundVoiceManager.removeListener(this.voiceManagerListener);
-    }
-
-    this.voiceManagerListener = (event) => {
-      void this.handleVoiceManagerEvent(event);
-    };
-
-    this.boundVoiceManager = voiceManager;
-    this.voiceMode = {
-      enabled: voiceManager.isRunning,
-      available: true,
-    };
-    voiceManager.onEvent(this.voiceManagerListener);
-    this.broadcastVoiceMode();
-    void this.applyStatus(this.mapVoiceState(voiceManager.currentState));
-  }
-
-  private async createMenubar(): Promise<Menubar> {
-    const trayIconDebugInfo = this.trayController.getIconDebugInfo();
-
-    console.log(
-      `[ui.main] creating menubar preloadPath=${this.preloadPath} preloadExists=${existsSync(this.preloadPath)} panelUrl=${this.panelUrl}`,
-    );
-    console.log(
-      `[ui.main] tray icon lookup resolvedPath=${trayIconDebugInfo.resolvedPath ?? 'missing'} usingFallback=${trayIconDebugInfo.usingFallback} expectedPaths=${trayIconDebugInfo.expectedPaths.join(', ')}`,
-    );
-
-    const tray = this.trayController.create();
-
-    console.log('[ui.main] tray icon is set');
-
-    console.log('[ui.main] importing menubar package');
-    const { menubar } = await import('menubar');
-    console.log('[ui.main] menubar package import resolved');
-
-    const instance = menubar({
-      index: this.panelUrl,
-      tooltip: TOOLTIP,
-      preloadWindow: true,
-      tray,
-      showDockIcon: false,
-      browserWindow: {
-        width: PANEL_WINDOW_WIDTH,
-        height: PANEL_WINDOW_HEIGHT,
-        show: false,
-        resizable: false,
-        maximizable: false,
-        minimizable: false,
-        fullscreenable: false,
-        titleBarStyle: 'hiddenInset',
-        backgroundColor: '#10161f',
-        webPreferences: {
-          preload: this.preloadPath,
-          contextIsolation: true,
-          nodeIntegration: false,
-        },
-      },
-    });
-
-    instance.on('ready', () => {
-      console.log('[ui.main] menubar ready event fired');
-      app.setName('Sonny');
-      app.dock?.hide();
-      console.log('[ui.main] app.dock.hide() called from menubar ready');
-      this.trayController.setStatus(this.status.status);
-    });
-
-    instance.on('after-create-window', () => {
-      console.log('[ui.main] menubar window created');
-      instance.window?.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-      });
-    });
-
-    instance.on('show', () => {
-      console.log('[ui.main] menubar window shown');
-    });
-
-    instance.on('after-show', () => {
-      console.log('[ui.main] menubar after-show fired');
-    });
-
-    instance.on('hide', () => {
-      console.log('[ui.main] menubar window hidden');
-    });
-
-    instance.on('create-window', () => {
-      console.log('[ui.main] menubar create-window fired');
-    });
-
-    instance.on('error', (error) => {
-      console.error('[ui.main] menubar error', error);
-    });
-
-    app.on('activate', () => {
-      console.log('[ui.main] app activate event fired');
-    });
-
+  private registerAppLifecycle(): void {
     app.on('before-quit', () => {
       this.stopping = true;
       console.log('[ui.main] before-quit fired');
@@ -248,15 +85,14 @@ export class UiMainApp {
       console.log(
         `[ui.main] window-all-closed fired stopping=${this.stopping}`,
       );
+    });
 
-      if (!this.stopping) {
-        console.log(
-          '[ui.main] ignoring window-all-closed because the menubar app should remain running',
-        );
-        return;
+    app.on('activate', () => {
+      console.log('[ui.main] app activate event fired');
+
+      if (this.controlCenterUrl !== undefined) {
+        void this.openControlCenter('activate');
       }
-
-      app.quit();
     });
 
     app.on('quit', () => {
@@ -266,241 +102,41 @@ export class UiMainApp {
     process.once('beforeExit', (code) => {
       console.log(`[ui.main] process beforeExit fired code=${code}`);
     });
-
-    return instance;
   }
 
-  private resolvePanelUrl(): string {
-    const distPanelHtmlPath = join(__dirname, 'panel', 'index.html');
+  private attachTrayBehavior(tray: Tray): void {
+    tray.on('click', () => {
+      void this.openControlCenter('tray-click');
+    });
 
-    console.log(
-      `[ui.main] checked panel path ${distPanelHtmlPath} exists=${existsSync(distPanelHtmlPath)}`,
-    );
-
-    if (existsSync(distPanelHtmlPath)) {
-      return pathToFileURL(distPanelHtmlPath).toString();
-    }
-
-    throw new Error(
-      `Panel HTML is missing at ${distPanelHtmlPath}. Run pnpm build to generate dist/ui/panel/index.html.`,
-    );
+    tray.on('right-click', () => {
+      void this.openControlCenter('tray-right-click');
+    });
   }
 
-  private registerIpc(): void {
-    if (this.ipcRegistered) {
-      console.log('[ui.main] IPC handlers already registered');
+  private async openControlCenter(source: string): Promise<void> {
+    if (this.controlCenterUrl === undefined) {
+      console.log(`[ui.main] control center URL unavailable source=${source}`);
       return;
     }
 
-    console.log('[ui.main] registering IPC handlers');
-    this.ipcRegistered = true;
-
-    ipcMain.handle('ui:get-status', async () => this.status);
-    ipcMain.handle(
-      'ui:set-status',
-      async (_event, nextStatus: UiMainStatusSnapshot['status']) => {
-        return this.applyStatus(nextStatus);
-      },
+    console.log(
+      `[ui.main] opening control center source=${source} url=${this.controlCenterUrl}`,
     );
-    ipcMain.handle('ui:get-voice-mode', async () => this.voiceMode);
-    ipcMain.handle('ui:toggle-voice-mode', async () => this.toggleVoiceMode());
-    ipcMain.handle('ui:toggle-panel', async () => {
-      const menubarApp = await this.start();
-
-      if (menubarApp.window?.isVisible() === true) {
-        menubarApp.hideWindow();
-        return;
-      }
-
-      await menubarApp.showWindow();
-    });
-    ipcMain.handle('ui:show-capsule', async () => {
-      // Temporary: keep the top-center capsule overlay disabled during manual voice validation.
-      this.capsuleWindow.hide();
-    });
-    ipcMain.handle('ui:hide-capsule', async () => {
-      this.capsuleWindow.hide();
-    });
-    ipcMain.handle('gateway:list-conversation', async () => {
-      console.log(
-        `[ui.main] IPC gateway:list-conversation entries=${this.conversation.length}`,
-      );
-      return [...this.conversation];
-    });
-    ipcMain.handle('gateway:send-message', async (_event, message: string) => {
-      const trimmedMessage = message.trim();
-
-      console.log(
-        `[ui.main] IPC gateway:send-message received messageLength=${trimmedMessage.length}`,
-      );
-
-      if (trimmedMessage.length === 0) {
-        console.log('[ui.main] ignoring empty gateway:send-message payload');
-        return '';
-      }
-
-      this.appendConversation('user', trimmedMessage);
-      await this.applyStatus('thinking');
-
-      try {
-        const gateway = await this.ensureGateway();
-        console.log('[ui.main] gateway resolved for IPC send-message');
-        const responseChunks: string[] = [];
-
-        for await (const chunk of gateway.streamChat(trimmedMessage)) {
-          if (chunk.type !== 'text' || chunk.text === undefined) {
-            continue;
-          }
-
-          responseChunks.push(chunk.text);
-          this.broadcastToken(chunk.text);
-        }
-
-        const response = responseChunks.join('');
-
-        console.log(
-          `[ui.main] gateway streamChat resolved responseLength=${response.length}`,
-        );
-
-        this.appendConversation('assistant', response);
-        this.broadcastTokenEnd(response);
-
-        return response;
-      } catch (error: unknown) {
-        console.error('[ui.main] gateway send-message failed', error);
-        throw error;
-      } finally {
-        await this.applyStatus('idle');
-      }
-    });
+    await shell.openExternal(this.controlCenterUrl);
   }
 
-  private async applyStatus(
+  private applyStatus(
     nextStatus: UiMainStatusSnapshot['status'],
-  ): Promise<UiMainStatusSnapshot> {
+  ): UiMainStatusSnapshot {
     this.status = {
       status: nextStatus,
       lastUpdatedAt: Date.now(),
     };
 
     this.trayController.setStatus(nextStatus);
-    // Temporary: disable the top-center capsule overlay without changing the rest of the UI state flow.
-    // await this.capsuleWindow.setStatus(nextStatus);
-    this.capsuleWindow.hide();
-
-    this.broadcastStatus();
 
     return this.status;
-  }
-
-  private broadcastStatus(): void {
-    this.menubarApp?.window?.webContents.send('ui:status-changed', this.status);
-  }
-
-  private broadcastVoiceMode(): void {
-    this.menubarApp?.window?.webContents.send(
-      'ui:voice-mode-changed',
-      this.voiceMode,
-    );
-  }
-
-  private broadcastToken(token: string): void {
-    const win = this.menubarApp?.window;
-
-    win?.webContents.send('token', token);
-  }
-
-  private broadcastTokenEnd(response: string): void {
-    const win = this.menubarApp?.window;
-
-    win?.webContents.send('token-end', response);
-  }
-
-  private appendConversation(
-    role: UiConversationEntry['role'],
-    content: string,
-  ): void {
-    this.conversation.push({
-      role,
-      content,
-      timestamp: Date.now(),
-    });
-
-    if (this.conversation.length > MAX_CONVERSATION_ENTRIES) {
-      this.conversation.splice(0, this.conversation.length - MAX_CONVERSATION_ENTRIES);
-    }
-  }
-
-  private async handleVoiceManagerEvent(event: VoiceManagerEvent): Promise<void> {
-    if (event.type === 'state_changed' && event.state !== undefined) {
-      this.voiceMode = {
-        enabled: this.boundVoiceManager?.isRunning === true,
-        available: this.boundVoiceManager !== undefined,
-      };
-      this.broadcastVoiceMode();
-      await this.applyStatus(this.mapVoiceState(event.state));
-      return;
-    }
-
-    if (event.type === 'transcription' && event.text !== undefined) {
-      this.appendConversation('user', event.text);
-      return;
-    }
-
-    if (event.type === 'response' && event.text !== undefined) {
-      this.appendConversation('assistant', event.text);
-    }
-  }
-
-  private async toggleVoiceMode(): Promise<UiVoiceModeSnapshot> {
-    const voiceManager = this.boundVoiceManager;
-
-    if (voiceManager === undefined) {
-      this.voiceMode = {
-        enabled: false,
-        available: false,
-      };
-      this.broadcastVoiceMode();
-      return this.voiceMode;
-    }
-
-    if (voiceManager.isRunning) {
-      await voiceManager.stop();
-      this.voiceMode = {
-        enabled: false,
-        available: true,
-      };
-      await this.applyStatus('idle');
-    } else {
-      await voiceManager.start();
-      this.voiceMode = {
-        enabled: true,
-        available: true,
-      };
-      await this.applyStatus(this.mapVoiceState(voiceManager.currentState));
-    }
-
-    this.broadcastVoiceMode();
-
-    return this.voiceMode;
-  }
-
-  private mapVoiceState(state: VoiceManagerState): UiMainStatusSnapshot['status'] {
-    switch (state) {
-      case 'listening':
-      case 'capturing':
-      case 'transcribing':
-        return 'listening';
-      case 'thinking':
-        return 'thinking';
-      case 'synthesizing':
-      case 'playing':
-        return 'speaking';
-      case 'idle':
-      case 'error':
-      default:
-        return 'idle';
-    }
   }
 
   private mapRuntimeState(state: SonnyRuntimeState): UiMainStatusSnapshot['status'] {
@@ -546,99 +182,8 @@ export class UiMainApp {
         return;
       }
 
-      void this.applyStatus(this.mapRuntimeState(event.snapshot.currentState));
+      this.applyStatus(this.mapRuntimeState(event.snapshot.currentState));
     });
-  }
-
-  private toConversationEntry(
-    message: LlmMessage,
-  ): UiConversationEntry | null {
-    if (message.role !== 'user' && message.role !== 'assistant') {
-      return null;
-    }
-
-    return {
-      role: message.role,
-      content: message.content,
-      timestamp: Date.now(),
-    };
-  }
-
-  private seedConversationFromSession(): void {
-    if (this.conversation.length > 0) {
-      return;
-    }
-
-    const gateway = this.gateway;
-
-    if (gateway === undefined) {
-      return;
-    }
-
-    for (const message of gateway.currentSession.getHistory()) {
-      const entry = this.toConversationEntry(message);
-
-      if (entry !== null) {
-        this.conversation.push(entry);
-      }
-    }
-  }
-
-  private async initializeGateway(): Promise<void> {
-    try {
-      console.log('[ui.main] initializeGateway start');
-      await this.ensureGateway();
-      console.log('[ui.main] initializeGateway resolved');
-      this.seedConversationFromSession();
-    } catch (error: unknown) {
-      console.error('[ui.main] gateway initialization failed', error);
-    }
-  }
-
-  private async ensureGateway(): Promise<Gateway> {
-    if (this.gateway !== undefined) {
-      console.log('[ui.main] reusing initialized gateway');
-      return this.gateway;
-    }
-
-    if (this.gatewayPromise === undefined) {
-      console.log('[ui.main] creating gateway promise');
-      this.gatewayPromise = this.createDefaultGateway();
-    } else {
-      console.log('[ui.main] awaiting in-flight gateway promise');
-    }
-
-    try {
-      this.gateway = await this.gatewayPromise;
-      console.log('[ui.main] gateway instance ready');
-      return this.gateway;
-    } finally {
-      this.gatewayPromise = undefined;
-    }
-  }
-
-  private async createDefaultGateway(): Promise<Gateway> {
-    try {
-      console.log('[ui.main] createDefaultGateway start');
-      const [{ Gateway }, { OllamaProvider }] = await Promise.all([
-        import('../core/gateway.js'),
-        import('../core/providers/ollama.js'),
-      ]);
-
-      const gateway = new Gateway({
-        llmProvider: new OllamaProvider(),
-        sessionConfig: {
-          systemPrompt: DEFAULT_SYSTEM_PROMPT,
-        },
-      });
-
-      console.log('[ui.main] createDefaultGateway complete');
-
-      return gateway;
-    } catch (error: unknown) {
-      console.error('[ui.main] failed to create default gateway', error);
-      throw error;
-    }
   }
 }
 

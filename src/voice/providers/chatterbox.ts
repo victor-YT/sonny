@@ -2,6 +2,7 @@ import type { TtsOptions, TtsProvider } from './tts.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8001';
 const DEFAULT_SYNTHESIZE_PATH = '/synthesize';
+const DEFAULT_STREAM_SYNTHESIZE_PATH = '/synthesize/stream';
 const DEFAULT_WARMUP_PATH = '/warmup';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -19,10 +20,11 @@ export interface Qwen3TtsConfig {
 
 export class Qwen3TTSProvider implements TtsProvider {
   public readonly name = 'qwen3-tts';
-  public readonly supportsStreaming = false;
+  public readonly supportsStreaming = true;
 
   private readonly baseUrl: string;
   private readonly synthesizePath: string;
+  private readonly streamSynthesizePath: string;
   private readonly warmupPath: string;
   private readonly timeoutMs: number;
   private readonly headers: Record<string, string>;
@@ -31,6 +33,9 @@ export class Qwen3TTSProvider implements TtsProvider {
     this.baseUrl = this.normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
     this.synthesizePath = this.normalizePath(
       config.synthesizePath ?? DEFAULT_SYNTHESIZE_PATH,
+    );
+    this.streamSynthesizePath = this.normalizePath(
+      DEFAULT_STREAM_SYNTHESIZE_PATH,
     );
     this.warmupPath = this.normalizePath(
       config.warmupPath ?? DEFAULT_WARMUP_PATH,
@@ -77,7 +82,25 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): AsyncIterable<Buffer> {
-    yield await this.synthesize(text, options);
+    const response = await this.request(this.streamSynthesizePath, text, options);
+
+    if (!response.ok) {
+      throw new Error(await this.buildHttpError(response));
+    }
+
+    if (response.body === null) {
+      throw new Error('Qwen3-TTS streaming response body was unavailable');
+    }
+
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+
+      if (buffer.byteLength === 0) {
+        continue;
+      }
+
+      yield buffer;
+    }
   }
 
   private normalizeBaseUrl(baseUrl: string): string {

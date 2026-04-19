@@ -29,6 +29,12 @@ import {
 const DEFAULT_HEALTH_POLL_MS = 15_000;
 const DEBUG_AUDIO_DIR = join(tmpdir(), 'sonny-debug');
 const DEBUG_AUDIO_FILE = join(DEBUG_AUDIO_DIR, 'last-manual-recording.wav');
+const DEFAULT_SAMPLE_AUDIO_CANDIDATES = [
+  process.env.SONNY_SAMPLE_AUDIO_PATH,
+  join(process.cwd(), 'test-sonny.wav'),
+  join(process.cwd(), 'test-mic.wav'),
+  join(process.cwd(), '.local', 'debug-audio', 'sample.wav'),
+].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
 const MIN_RECORDING_BYTES = 4_096;
 const MIN_RECORDING_DURATION_MS = 250;
 const TARGET_RECORDING_SAMPLE_RATE_HERTZ = 16_000;
@@ -38,7 +44,7 @@ const TARGET_RECORDING_FORMAT = 'wav';
 
 type PipelineStageName = 'recording' | 'stt' | 'gateway' | 'tts' | 'playback';
 type PipelineStageStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'interrupted';
-type FlowKind = 'manual' | 'tts';
+type FlowKind = 'auto' | 'manual' | 'sample' | 'tts';
 type AudioQualityHint =
   | 'ok'
   | 'too_quiet'
@@ -89,8 +95,11 @@ export interface PipelineStageDebug {
 }
 
 export interface VoiceLatencyTimestamps {
+  micStartAt: string | null;
+  silenceDetectedAt: string | null;
   stopListeningAt: string | null;
   sttStartedAt: string | null;
+  sttFirstChunkAt: string | null;
   sttFinishedAt: string | null;
   gatewayStartedAt: string | null;
   firstTokenAt: string | null;
@@ -104,6 +113,8 @@ export interface VoiceLatencyTimestamps {
 
 export interface VoiceLatencyDurations {
   sttLatencyMs: number | null;
+  silenceToFirstTokenMs: number | null;
+  silenceToPlaybackFinishedMs: number | null;
   gatewayToFirstTokenMs: number | null;
   gatewayToFirstSentenceMs: number | null;
   ttsToFirstAudioMs: number | null;
@@ -132,6 +143,17 @@ export interface VoicePipelineDebugInfo {
     transcriptLength: number | null;
     failureReason: SttFailureReason | null;
   };
+  playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
+  playerCommand: string | null;
+  verdict: {
+    sttPartials: boolean;
+    transcriptFinal: boolean;
+    llmStreaming: boolean;
+    ttsStreamingPath: boolean;
+    playbackStarted: boolean;
+    playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
+    fullTurnSuccess: boolean;
+  };
   flow: FlowKind | null;
   updatedAt: string | null;
 }
@@ -144,6 +166,11 @@ export interface RetranscribeLastAudioResult {
   sttDebug: VoicePipelineDebugInfo['sttDebug'];
 }
 
+export interface RunSampleVoiceTurnResult {
+  filePath: string;
+  pipeline: VoicePipelineDebugInfo;
+}
+
 export class VoiceSessionOrchestrator {
   private readonly gateway: Gateway;
   private readonly voiceGateway: VoiceGateway;
@@ -154,6 +181,8 @@ export class VoiceSessionOrchestrator {
 
   private healthTimer: NodeJS.Timeout | undefined;
   private manualRecorder: ManualRecorderSession | undefined;
+  private activeCaptureAbortController: AbortController | undefined;
+  private activeInteractionTask: Promise<void> | undefined;
   private servicesStarted = false;
   private started = false;
   private activeFlow: FlowKind | null = null;
@@ -190,7 +219,19 @@ export class VoiceSessionOrchestrator {
   }
 
   public getPipelineDebug(): VoicePipelineDebugInfo {
-    return clonePipelineDebug(this.pipelineDebug);
+    const diagnostics = this.voiceGateway.speaker.getPlaybackDiagnostics();
+
+    return clonePipelineDebug({
+      ...this.pipelineDebug,
+      playbackMode: diagnostics.playbackMode,
+      playerCommand: diagnostics.playerCommand,
+      verdict: buildPipelineVerdict({
+        ...this.pipelineDebug,
+        playbackMode: diagnostics.playbackMode,
+        playerCommand: diagnostics.playerCommand,
+        verdict: this.pipelineDebug.verdict,
+      }),
+    });
   }
 
   public getRecorderDebug(): RecorderRuntimeDebugInfo {
@@ -289,6 +330,11 @@ export class VoiceSessionOrchestrator {
       this.manualRecorder = undefined;
     }
 
+    this.activeCaptureAbortController?.abort();
+    this.activeCaptureAbortController = undefined;
+    await this.activeInteractionTask?.catch(() => undefined);
+    this.activeInteractionTask = undefined;
+
     await this.voiceGateway.manager.interruptCurrentInteraction();
     await this.voiceGateway.speaker.stop();
 
@@ -307,39 +353,65 @@ export class VoiceSessionOrchestrator {
   }
 
   public async startListening(): Promise<void> {
-    this.log('manual_listen_started', 'Manual listen requested.');
+    this.log('manual_listen_started', 'Automatic listen turn requested.');
 
     try {
       await this.ensureServicesReady();
 
-      if (this.manualRecorder !== undefined) {
+      if (this.manualRecorder !== undefined || this.activeInteractionTask !== undefined) {
         return;
       }
 
-      this.resetPipelineDebug('manual');
+      await this.voiceGateway.manager.interruptCurrentInteraction();
+      this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
+      this.runtimeState.setMicActive(true);
+      this.runtimeState.setPlaybackActive(false);
+      this.runtimeState.setUserPartialTranscript(null);
+      this.runtimeState.setAssistantPartialResponse(null);
+      this.resetPipelineDebug('auto');
       this.markStage('recording', 'running');
-      this.manualRecorder = await ManualRecorderSession.start({
-        sampleRateHertz: this.getSampleRate(),
-        channels: this.getChannels(),
-        recorder: this.environmentConfig.micRecordProgram ?? 'sox',
+      this.markLatencyTimestamp('micStartAt');
+      this.recorderDebug = {
+        ...this.recorderDebug,
+        backend: this.environmentConfig.micRecordProgram ?? 'sox',
+        backendAvailable: true,
+        spawnStarted: true,
         device:
           this.environmentConfig.audioDeviceIndex === undefined
             ? 'default'
             : `input-index:${this.environmentConfig.audioDeviceIndex}`,
-        audioType: 'wav',
-        onDiagnosticEvent: (event) => {
-          this.handleRecorderDiagnosticEvent(event);
-        },
-      });
-      this.recorderDebug = this.manualRecorder.getDebugInfo();
-      this.runtimeState.setMicActive(true);
+        usingDefaultDevice: this.environmentConfig.audioDeviceIndex === undefined,
+        lastFailureReason: null,
+        lastSpawnError: null,
+      };
       this.runtimeState.transition('listening', {
         meta: {},
       });
-      this.log('recording_started', 'Manual recording started.', {
+      this.log('recording_started', 'Automatic microphone capture started.', {
         sampleRate: this.getSampleRate(),
         channels: this.getChannels(),
         recorder: this.environmentConfig.micRecordProgram ?? 'sox',
+      });
+
+      const abortController = new AbortController();
+      this.activeCaptureAbortController = abortController;
+      const capture = await this.voiceGateway.microphone.capture({
+        signal: abortController.signal,
+        onSilenceDetected: () => {
+          this.handleSilenceDetected();
+        },
+      });
+
+      const interactionTask = this.runAutomaticTurn(capture, abortController.signal);
+      this.activeInteractionTask = interactionTask;
+      void interactionTask.finally(() => {
+        if (this.activeInteractionTask === interactionTask) {
+          this.activeInteractionTask = undefined;
+        }
+
+        if (this.activeCaptureAbortController === abortController) {
+          this.activeCaptureAbortController = undefined;
+        }
       });
     } catch (error: unknown) {
       if (error instanceof ManualRecorderError) {
@@ -356,95 +428,90 @@ export class VoiceSessionOrchestrator {
   public async stopListening(): Promise<void> {
     const recorder = this.manualRecorder;
 
-    this.log('manual_listen_stopped', 'Manual listen stop requested.');
+    this.log('manual_listen_stopped', 'Listen stop requested.', {});
 
-    if (recorder === undefined) {
-      return;
+    if (recorder !== undefined) {
+      try {
+        this.manualRecorder = undefined;
+        this.runtimeState.setMicActive(false);
+        this.markLatencyTimestamp('stopListeningAt');
+        const audio = await recorder.stop();
+        await this.processBufferedRecording(audio, recorder.getDebugInfo());
+        return;
+      } catch (error: unknown) {
+        if (error instanceof ManualRecorderError) {
+          this.recorderDebug = error.diagnostics;
+        }
+
+        if (this.findFailedPipelineStage() !== null) {
+          throw error instanceof Error ? error : new Error(toErrorMessage(error));
+        }
+
+        const message = toErrorMessage(error);
+        const stage = this.activeFailureStage ?? 'recording';
+
+        if (stage === 'recording') {
+          this.failStage('recording', 'recording_failed', message);
+        } else {
+          this.failActiveFlow(stage, message);
+        }
+
+        throw error instanceof Error ? error : new Error(message);
+      }
     }
 
+    this.activeCaptureAbortController?.abort();
+    this.activeCaptureAbortController = undefined;
+    await this.voiceGateway.manager.interruptCurrentInteraction();
+    await this.activeInteractionTask?.catch(() => undefined);
+    this.activeInteractionTask = undefined;
+    this.runtimeState.setMicActive(false);
+    this.runtimeState.setUserPartialTranscript(null);
+    this.runtimeState.setAssistantPartialResponse(null);
+    this.runtimeState.transition('idle', {
+      meta: {},
+    });
+  }
+
+  private async runAutomaticTurn(
+    capture: Awaited<ReturnType<VoiceGateway['microphone']['capture']>>,
+    signal: AbortSignal,
+  ): Promise<void> {
     try {
-      this.manualRecorder = undefined;
-      this.runtimeState.setMicActive(false);
-      this.markLatencyTimestamp('stopListeningAt');
-
-      const audio = await recorder.stop();
-      this.recorderDebug = recorder.getDebugInfo();
-      const audioDebug = await this.persistDebugAudio(audio);
-
-      this.lastAudioDebug = audioDebug;
-
-      this.log('recording_stopped', 'Manual recording stopped.', {
-        bytes: audio.byteLength,
-      });
-
-      if (audioDebug.exists) {
-        this.log('recording_saved', 'Saved latest manual recording.', {
-          path: audioDebug.path,
-          size: audioDebug.size,
-          byteLength: audioDebug.byteLength,
-          durationMs: audioDebug.durationMs,
-          sampleRate: audioDebug.sampleRate,
-          channels: audioDebug.channels,
-          bitsPerSample: audioDebug.bitsPerSample,
-          format: audioDebug.format,
-          encoding: audioDebug.encoding,
-          rmsLevel: audioDebug.rmsLevel,
-          peakAmplitude: audioDebug.peakAmplitude,
-          silentRatio: audioDebug.silentRatio,
-          suspectedSilent: audioDebug.suspectedSilent,
-          audioQualityHint: audioDebug.audioQualityHint,
-          device: audioDebug.device,
-        });
-
-        if (audioDebug.whisperInputRisk !== null) {
-          this.log(
-            'recording_format_warning',
-            audioDebug.whisperInputRisk,
-            {
-              sampleRate: audioDebug.sampleRate,
-              channels: audioDebug.channels,
-              encoding: audioDebug.encoding,
-              format: audioDebug.format,
-              targetSampleRate: audioDebug.targetSampleRate,
-              targetChannels: audioDebug.targetChannels,
-              targetEncoding: audioDebug.targetEncoding,
-              targetFormat: audioDebug.targetFormat,
-            },
-            'warn',
-          );
-        }
-      }
-
-      this.validateRecordedAudio(audio, audioDebug);
-      this.markStage('recording', 'succeeded');
       this.markStage('stt', 'running');
       this.activeFailureStage = 'stt';
       this.markLatencyTimestamp('sttStartedAt');
-      this.log('stt_started', 'Submitting audio to STT.', {
-        bytes: audio.byteLength,
-        sampleRate: audioDebug.sampleRate,
-        channels: audioDebug.channels,
+      this.log('stt_started', 'Streaming audio to STT.', {
+        sampleRate: this.getSampleRate(),
+        channels: this.getChannels(),
         ...this.buildLatencyLogMeta(),
       });
-      this.runtimeState.transition('transcribing', {
-        meta: {},
-      });
 
-      await this.voiceGateway.manager.processAudio(audio, {
+      const persistedAudioPromise = capture.audioPromise
+        ?.then(async (audio) => {
+          const audioDebug = await this.persistDebugAudio(audio);
+
+          this.lastAudioDebug = audioDebug;
+          this.logRecordedAudio(audio, audioDebug);
+          this.validateRecordedAudio(audio, audioDebug);
+        });
+
+      await this.voiceGateway.manager.processCapture(capture, {
         stt: {
           language: this.environmentConfig.sttLanguage,
-          sampleRateHertz: audioDebug.sampleRate ?? this.getSampleRate(),
-          channels: audioDebug.channels ?? this.getChannels(),
-          encoding: 'wav',
+          sampleRateHertz: this.getSampleRate(),
+          channels: this.getChannels(),
+          encoding: 'pcm_s16le',
         },
         tts: {
           voice: this.environmentConfig.ttsVoice,
         },
       });
+      await persistedAudioPromise;
       this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
     } catch (error: unknown) {
-      if (error instanceof ManualRecorderError) {
-        this.recorderDebug = error.diagnostics;
+      if (signal.aborted) {
+        return;
       }
 
       if (this.findFailedPipelineStage() !== null) {
@@ -461,6 +528,157 @@ export class VoiceSessionOrchestrator {
       }
 
       throw error instanceof Error ? error : new Error(message);
+    }
+  }
+
+  private async processBufferedRecording(
+    audio: Buffer,
+    debugInfo: RecorderRuntimeDebugInfo,
+  ): Promise<void> {
+    this.recorderDebug = debugInfo;
+    const audioDebug = await this.persistDebugAudio(audio);
+
+    this.lastAudioDebug = audioDebug;
+    this.logRecordedAudio(audio, audioDebug);
+    this.validateRecordedAudio(audio, audioDebug);
+    this.markStage('recording', 'succeeded');
+    this.markStage('stt', 'running');
+    this.activeFailureStage = 'stt';
+    this.markLatencyTimestamp('sttStartedAt');
+    this.log('stt_started', 'Submitting audio to STT.', {
+      bytes: audio.byteLength,
+      sampleRate: audioDebug.sampleRate,
+      channels: audioDebug.channels,
+      ...this.buildLatencyLogMeta(),
+    });
+    this.runtimeState.transition('transcribing', {
+      meta: {},
+    });
+
+    await this.voiceGateway.manager.processAudio(audio, {
+      stt: {
+        language: this.environmentConfig.sttLanguage,
+        sampleRateHertz: audioDebug.sampleRate ?? this.getSampleRate(),
+        channels: audioDebug.channels ?? this.getChannels(),
+        encoding: 'wav',
+      },
+      tts: {
+        voice: this.environmentConfig.ttsVoice,
+      },
+    });
+    this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
+  }
+
+  private handleSilenceDetected(): void {
+    this.runtimeState.setMicActive(false);
+    this.markStage('recording', 'succeeded');
+    this.markLatencyTimestamp('silenceDetectedAt');
+    this.markLatencyTimestamp('stopListeningAt');
+    this.runtimeState.transition('thinking', {
+      meta: {},
+    });
+    this.log('silence_detected', 'Silence detected. Finalizing the current turn.', {
+      ...this.buildLatencyLogMeta(),
+    });
+  }
+
+  private async resolveSampleAudioPath(filePath?: string): Promise<string> {
+    const candidates = [
+      filePath,
+      ...DEFAULT_SAMPLE_AUDIO_CANDIDATES,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+    for (const candidate of candidates) {
+      try {
+        await stat(candidate);
+        return candidate;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+
+    throw new Error(
+      'No sample audio file was found. Pass a file path explicitly or set SONNY_SAMPLE_AUDIO_PATH.',
+    );
+  }
+
+  private async createCaptureFromAudioFile(filePath: string): Promise<{
+    audio: Buffer;
+    audioPromise: Promise<Buffer>;
+    audioStream: AsyncIterable<Buffer>;
+    sttOptions: {
+      language?: string;
+      sampleRateHertz: number;
+      channels: number;
+      encoding: 'wav' | 'pcm_s16le';
+    };
+  }> {
+    const audio = await readFile(filePath);
+    const metadata = parseWaveAudioMetadata(audio);
+
+    if (metadata === null) {
+      throw new Error('Sample audio file must be a PCM WAV that Sonny can inspect and stream.');
+    }
+
+    const pcm = audio.subarray(metadata.dataOffset, metadata.dataOffset + metadata.dataSize);
+    const pcmStream = createBufferedChunkStream(pcm, 3_200);
+
+    return {
+      audio,
+      audioPromise: Promise.resolve(audio),
+      audioStream: pcmStream,
+      sttOptions: {
+        language: this.environmentConfig.sttLanguage,
+        sampleRateHertz: metadata.sampleRate,
+        channels: metadata.channels,
+        encoding: 'pcm_s16le',
+      },
+    };
+  }
+
+  private logRecordedAudio(audio: Buffer, audioDebug: LastAudioDebugInfo): void {
+    this.log('recording_stopped', 'Recording finalized.', {
+      bytes: audio.byteLength,
+    });
+
+    if (!audioDebug.exists) {
+      return;
+    }
+
+    this.log('recording_saved', 'Saved latest recording.', {
+      path: audioDebug.path,
+      size: audioDebug.size,
+      byteLength: audioDebug.byteLength,
+      durationMs: audioDebug.durationMs,
+      sampleRate: audioDebug.sampleRate,
+      channels: audioDebug.channels,
+      bitsPerSample: audioDebug.bitsPerSample,
+      format: audioDebug.format,
+      encoding: audioDebug.encoding,
+      rmsLevel: audioDebug.rmsLevel,
+      peakAmplitude: audioDebug.peakAmplitude,
+      silentRatio: audioDebug.silentRatio,
+      suspectedSilent: audioDebug.suspectedSilent,
+      audioQualityHint: audioDebug.audioQualityHint,
+      device: audioDebug.device,
+    });
+
+    if (audioDebug.whisperInputRisk !== null) {
+      this.log(
+        'recording_format_warning',
+        audioDebug.whisperInputRisk,
+        {
+          sampleRate: audioDebug.sampleRate,
+          channels: audioDebug.channels,
+          encoding: audioDebug.encoding,
+          format: audioDebug.format,
+          targetSampleRate: audioDebug.targetSampleRate,
+          targetChannels: audioDebug.targetChannels,
+          targetEncoding: audioDebug.targetEncoding,
+          targetFormat: audioDebug.targetFormat,
+        },
+        'warn',
+      );
     }
   }
 
@@ -499,10 +717,60 @@ export class VoiceSessionOrchestrator {
     await this.testTts(this.lastReplayText, this.environmentConfig.ttsVoice);
   }
 
-  public async interruptPlayback(): Promise<void> {
+  public async runSampleVoiceTurn(filePath?: string): Promise<RunSampleVoiceTurnResult> {
+    await this.ensureServicesReady();
+
+    const resolvedPath = await this.resolveSampleAudioPath(filePath);
+
+    if (this.manualRecorder !== undefined) {
+      await this.manualRecorder.cancel();
+      this.manualRecorder = undefined;
+    }
+
+    this.activeCaptureAbortController?.abort();
+    this.activeCaptureAbortController = undefined;
+    await this.activeInteractionTask?.catch(() => undefined);
+    this.activeInteractionTask = undefined;
     await this.voiceGateway.manager.interruptCurrentInteraction();
+
+    this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
     this.runtimeState.setMicActive(false);
     this.runtimeState.setPlaybackActive(false);
+    this.runtimeState.setUserPartialTranscript(null);
+    this.runtimeState.setAssistantPartialResponse(null);
+    this.resetPipelineDebug('sample');
+    this.markStage('recording', 'running');
+    this.markLatencyTimestamp('micStartAt');
+    this.markLatencyTimestamp('silenceDetectedAt');
+    this.markLatencyTimestamp('stopListeningAt');
+    this.markStage('recording', 'succeeded');
+    this.runtimeState.transition('thinking', {
+      meta: {
+        source: 'sample',
+      },
+    });
+    this.log('sample_turn_started', 'Running sample voice turn from file.', {
+      path: resolvedPath,
+      ...this.buildLatencyLogMeta(),
+    });
+
+    const capture = await this.createCaptureFromAudioFile(resolvedPath);
+    await this.runAutomaticTurn(capture, new AbortController().signal);
+
+    return {
+      filePath: resolvedPath,
+      pipeline: this.getPipelineDebug(),
+    };
+  }
+
+  public async interruptPlayback(): Promise<void> {
+    await this.voiceGateway.manager.interruptCurrentInteraction();
+    this.activeCaptureAbortController?.abort();
+    this.activeCaptureAbortController = undefined;
+    this.runtimeState.setMicActive(false);
+    this.runtimeState.setPlaybackActive(false);
+    this.runtimeState.setUserPartialTranscript(null);
+    this.runtimeState.setAssistantPartialResponse(null);
     this.runtimeState.markConversationInterrupted();
     this.markStage('playback', 'interrupted');
     this.log('playback_interrupted', 'Playback interrupted.', {});
@@ -527,6 +795,10 @@ export class VoiceSessionOrchestrator {
       this.manualRecorder = undefined;
     }
 
+    this.activeCaptureAbortController?.abort();
+    this.activeCaptureAbortController = undefined;
+    await this.activeInteractionTask?.catch(() => undefined);
+    this.activeInteractionTask = undefined;
     await this.voiceGateway.manager.interruptCurrentInteraction();
     this.runtimeState.resetToIdle();
     this.resetFlowState();
@@ -646,6 +918,20 @@ export class VoiceSessionOrchestrator {
       return;
     }
 
+    if (event.type === 'transcription_partial' && event.text !== undefined) {
+      if (this.pipelineDebug.latency.timestamps.sttFirstChunkAt === null) {
+        this.markLatencyTimestamp('sttFirstChunkAt');
+        this.log('stt_first_chunk', 'Streaming STT emitted the first partial transcript.', {
+          transcriptLength: event.text.length,
+          preview: event.text.slice(0, 120),
+          ...this.buildLatencyLogMeta(),
+        });
+      }
+
+      this.runtimeState.setUserPartialTranscript(event.text);
+      return;
+    }
+
     if (event.type === 'first_token' && event.text !== undefined) {
       if (this.pipelineDebug.latency.timestamps.firstTokenAt === null) {
         this.markLatencyTimestamp('firstTokenAt');
@@ -654,6 +940,11 @@ export class VoiceSessionOrchestrator {
           ...this.buildLatencyLogMeta(),
         });
       }
+      return;
+    }
+
+    if (event.type === 'response_partial' && event.text !== undefined) {
+      this.runtimeState.setAssistantPartialResponse(event.text);
       return;
     }
 
@@ -705,6 +996,7 @@ export class VoiceSessionOrchestrator {
         ...this.buildSttLogMeta(),
         ...this.buildLatencyLogMeta(),
       });
+      this.runtimeState.setUserPartialTranscript(null);
       this.runtimeState.setLastTranscript(event.text);
       this.markStage('gateway', 'running');
       this.activeFailureStage = 'gateway';
@@ -727,6 +1019,7 @@ export class VoiceSessionOrchestrator {
         responseLength: event.text.length,
         ...this.buildLatencyLogMeta(),
       });
+      this.runtimeState.setAssistantPartialResponse(null);
       this.runtimeState.setLastResponseText(event.text);
       this.lastReplayText = event.text;
       return;
@@ -758,6 +1051,11 @@ export class VoiceSessionOrchestrator {
         event.state === 'idle' &&
         this.runtimeState.getSnapshot().currentState === 'error'
       ) {
+        return;
+      }
+
+      if (event.state === 'transcribing' && this.runtimeState.getSnapshot().micActive) {
+        this.activeFailureStage = 'stt';
         return;
       }
 
@@ -823,8 +1121,15 @@ export class VoiceSessionOrchestrator {
         this.runtimeState.markConversationCompleted();
         this.log('playback_finished', 'Playback finished.', this.buildLatencyLogMeta());
 
-        if (this.activeFlow === 'manual' && this.awaitingPlaybackCompletion) {
-          this.log('voice_pipeline_completed', 'Manual voice pipeline completed.', this.buildLatencyLogMeta());
+        if (
+          (this.activeFlow === 'manual' || this.activeFlow === 'auto') &&
+          this.awaitingPlaybackCompletion
+        ) {
+          this.log(
+            'voice_pipeline_completed',
+            `${this.activeFlow === 'auto' ? 'Automatic' : 'Manual'} voice pipeline completed.`,
+            this.buildLatencyLogMeta(),
+          );
         }
 
         this.awaitingPlaybackCompletion = false;
@@ -895,8 +1200,11 @@ export class VoiceSessionOrchestrator {
     const { timestamps, durations } = this.pipelineDebug.latency;
 
     return {
+      micStartAt: timestamps.micStartAt,
+      silenceDetectedAt: timestamps.silenceDetectedAt,
       stopListeningAt: timestamps.stopListeningAt,
       sttStartedAt: timestamps.sttStartedAt,
+      sttFirstChunkAt: timestamps.sttFirstChunkAt,
       sttFinishedAt: timestamps.sttFinishedAt,
       gatewayStartedAt: timestamps.gatewayStartedAt,
       firstTokenAt: timestamps.firstTokenAt,
@@ -907,6 +1215,8 @@ export class VoiceSessionOrchestrator {
       playbackStartedAt: timestamps.playbackStartedAt,
       playbackFinishedAt: timestamps.playbackFinishedAt,
       sttLatencyMs: durations.sttLatencyMs,
+      silenceToFirstTokenMs: durations.silenceToFirstTokenMs,
+      silenceToPlaybackFinishedMs: durations.silenceToPlaybackFinishedMs,
       gatewayToFirstTokenMs: durations.gatewayToFirstTokenMs,
       gatewayToFirstSentenceMs: durations.gatewayToFirstSentenceMs,
       ttsToFirstAudioMs: durations.ttsToFirstAudioMs,
@@ -1220,6 +1530,17 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       transcriptLength: null,
       failureReason: null,
     },
+    playbackMode: 'unknown',
+    playerCommand: null,
+    verdict: {
+      sttPartials: false,
+      transcriptFinal: false,
+      llmStreaming: false,
+      ttsStreamingPath: false,
+      playbackStarted: false,
+      playbackMode: 'unknown',
+      fullTurnSuccess: false,
+    },
     flow,
     updatedAt: null,
   };
@@ -1266,8 +1587,35 @@ function clonePipelineDebug(value: VoicePipelineDebugInfo): VoicePipelineDebugIn
       transcriptLength: value.sttDebug.transcriptLength,
       failureReason: value.sttDebug.failureReason,
     },
+    playbackMode: value.playbackMode,
+    playerCommand: value.playerCommand,
+    verdict: {
+      ...value.verdict,
+    },
     flow: value.flow,
     updatedAt: value.updatedAt,
+  };
+}
+
+function buildPipelineVerdict(
+  value: VoicePipelineDebugInfo,
+): VoicePipelineDebugInfo['verdict'] {
+  const fullTurnSuccess =
+    value.stt.status === 'succeeded' &&
+    value.gateway.status === 'succeeded' &&
+    value.tts.status === 'succeeded' &&
+    value.playback.status === 'succeeded';
+
+  return {
+    sttPartials: value.latency.timestamps.sttFirstChunkAt !== null,
+    transcriptFinal:
+      (value.sttDebug.transcriptLength ?? 0) > 0 &&
+      value.stt.status === 'succeeded',
+    llmStreaming: value.latency.timestamps.firstTokenAt !== null,
+    ttsStreamingPath: value.latency.timestamps.ttsFirstAudioReadyAt !== null,
+    playbackStarted: value.latency.timestamps.playbackStartedAt !== null,
+    playbackMode: value.playbackMode,
+    fullTurnSuccess,
   };
 }
 
@@ -1277,8 +1625,11 @@ function createEmptyLatencyDebug(): {
 } {
   return {
     timestamps: {
+      micStartAt: null,
+      silenceDetectedAt: null,
       stopListeningAt: null,
       sttStartedAt: null,
+      sttFirstChunkAt: null,
       sttFinishedAt: null,
       gatewayStartedAt: null,
       firstTokenAt: null,
@@ -1291,6 +1642,8 @@ function createEmptyLatencyDebug(): {
     },
     durations: {
       sttLatencyMs: null,
+      silenceToFirstTokenMs: null,
+      silenceToPlaybackFinishedMs: null,
       gatewayToFirstTokenMs: null,
       gatewayToFirstSentenceMs: null,
       ttsToFirstAudioMs: null,
@@ -1311,6 +1664,14 @@ function computeLatencyDebug(
     timestamps,
     durations: {
       sttLatencyMs: diffMs(timestamps.sttStartedAt, timestamps.sttFinishedAt),
+      silenceToFirstTokenMs: diffMs(
+        timestamps.silenceDetectedAt,
+        timestamps.firstTokenAt,
+      ),
+      silenceToPlaybackFinishedMs: diffMs(
+        timestamps.silenceDetectedAt,
+        timestamps.playbackFinishedAt,
+      ),
       gatewayToFirstTokenMs: diffMs(timestamps.gatewayStartedAt, timestamps.firstTokenAt),
       gatewayToFirstSentenceMs: diffMs(
         timestamps.gatewayStartedAt,
@@ -1361,7 +1722,6 @@ function mapVoiceManagerState(
     case 'capturing':
       return 'listening';
     case 'transcribing':
-      return 'transcribing';
     case 'thinking':
       return 'thinking';
     case 'synthesizing':
@@ -1659,6 +2019,15 @@ function normalizeOptionalHealthUrl(value: string | undefined): string | null {
   }
 
   return `${normalizeBaseUrl(value)}/health`;
+}
+
+async function* createBufferedChunkStream(
+  audio: Buffer,
+  chunkSize: number,
+): AsyncIterable<Buffer> {
+  for (let offset = 0; offset < audio.byteLength; offset += chunkSize) {
+    yield audio.subarray(offset, Math.min(audio.byteLength, offset + chunkSize));
+  }
 }
 
 function toErrorMessage(error: unknown): string {

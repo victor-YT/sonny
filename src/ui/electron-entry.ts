@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   console.log(`[console] ${runtime.consoleServer.address.url}`);
 
   const uiApp = await startUiMainApp({
-    gateway: runtime.gateway,
+    controlCenterUrl: runtime.consoleServer.address.url,
     runtimeState: runtime.runtimeState,
   });
 
