@@ -54,6 +54,13 @@ export interface RuntimeConfig {
   voice: VoiceRuntimeConfig;
   memory: MemoryRuntimeConfig;
   skills: SkillsRuntimeConfig;
+  sttProvider: string;
+  foregroundLlmProvider: string;
+  backgroundLlmProvider: string;
+  ttsProvider: string;
+  playbackProvider: string;
+  foregroundModel: string;
+  backgroundModel: string;
 }
 
 export interface RuntimeConfigUpdate {
@@ -64,6 +71,13 @@ export interface RuntimeConfigUpdate {
     porcupine?: Partial<PorcupineRuntimeConfig>;
   };
   memory?: Partial<MemoryRuntimeConfig>;
+  sttProvider?: string;
+  foregroundLlmProvider?: string;
+  backgroundLlmProvider?: string;
+  ttsProvider?: string;
+  playbackProvider?: string;
+  foregroundModel?: string;
+  backgroundModel?: string;
 }
 
 export const DEFAULT_RUNTIME_PLATFORM: RuntimePlatform = process.platform;
@@ -185,6 +199,15 @@ function applyRuntimeConfigUpdate(
       ...memory,
       ...update.memory,
     },
+    sttProvider: update.sttProvider ?? current.sttProvider,
+    foregroundLlmProvider:
+      update.foregroundLlmProvider ?? current.foregroundLlmProvider,
+    backgroundLlmProvider:
+      update.backgroundLlmProvider ?? current.backgroundLlmProvider,
+    ttsProvider: update.ttsProvider ?? current.ttsProvider,
+    playbackProvider: update.playbackProvider ?? current.playbackProvider,
+    foregroundModel: update.foregroundModel ?? current.foregroundModel,
+    backgroundModel: update.backgroundModel ?? current.backgroundModel,
   };
 }
 

@@ -12,7 +12,8 @@ import {
 } from './api.js';
 
 const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 3000;
+const DEFAULT_PORT = 3001;
+const CONSOLE_PORT_ENV = 'SONNY_CONSOLE_PORT';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,7 +40,10 @@ export class ConsoleServer {
 
   public constructor(config: ConsoleServerConfig = {}) {
     this.host = config.host ?? DEFAULT_HOST;
-    this.port = config.port ?? DEFAULT_PORT;
+    this.port =
+      config.port ??
+      readConsolePort(process.env[CONSOLE_PORT_ENV]) ??
+      DEFAULT_PORT;
     this.publicDirectory =
       config.publicDirectory ?? join(__dirname, 'public');
     this.app = express();
@@ -124,6 +128,26 @@ export class ConsoleServer {
       response.type('text/plain').send('Sonny console server is running.');
     });
   }
+}
+
+function readConsolePort(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+
+  if (!/^\d+$/u.test(normalized)) {
+    throw new Error(`${CONSOLE_PORT_ENV} must be a TCP port between 1 and 65535.`);
+  }
+
+  const port = Number.parseInt(normalized, 10);
+
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${CONSOLE_PORT_ENV} must be a TCP port between 1 and 65535.`);
+  }
+
+  return port;
 }
 
 export async function startConsoleServer(

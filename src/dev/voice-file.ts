@@ -39,6 +39,8 @@ async function main(): Promise<void> {
       `Final Response: ${snapshot.lastResponseText ?? 'none'}`,
     ]);
     printSection('Pipeline Verdict', formatVerdict(pipeline));
+    printSection('Providers', formatProviders(pipeline));
+    printSection('Barge-In', formatBargeIn(pipeline));
     printSection('Latency', formatLatency(pipeline));
     printSection('Playback', [
       `Playback Mode: ${pipeline.playbackMode}`,
@@ -109,6 +111,36 @@ function formatLatency(pipeline: VoicePipelineDebugInfo): string[] {
     `Playback Finished At: ${pipeline.latency.timestamps.playbackFinishedAt ?? 'unknown'}`,
     `First Token Latency: ${String(pipeline.latency.durations.silenceToFirstTokenMs ?? 'unknown')}ms`,
     `Total Response Latency: ${String(pipeline.latency.durations.silenceToPlaybackFinishedMs ?? 'unknown')}ms`,
+  ];
+}
+
+function formatProviders(pipeline: VoicePipelineDebugInfo): string[] {
+  return [
+    `STT Provider: ${pipeline.providers.sttProvider ?? 'unknown'}`,
+    `Foreground LLM Provider: ${pipeline.providers.foregroundLlmProvider ?? 'unknown'}`,
+    `Background LLM Provider: ${pipeline.providers.backgroundLlmProvider ?? 'unknown'}`,
+    `TTS Provider: ${pipeline.providers.ttsProvider ?? 'unknown'}`,
+    `Playback Provider: ${pipeline.providers.playbackProvider ?? 'unknown'}`,
+    `Foreground Model: ${pipeline.providers.foregroundModel ?? 'unknown'}`,
+    `Background Model: ${pipeline.providers.backgroundModel ?? 'unknown'}`,
+    `Selected LLM Provider: ${pipeline.providers.lastSelectedLlmProvider ?? 'unknown'}`,
+    `Selected Model: ${pipeline.providers.lastSelectedModel ?? 'unknown'}`,
+    `Selected Lane: ${pipeline.providers.lastSelectedLane ?? 'unknown'}`,
+    `Router Reason: ${pipeline.providers.lastRouterReason ?? 'unknown'}`,
+  ];
+}
+
+function formatBargeIn(pipeline: VoicePipelineDebugInfo): string[] {
+  return [
+    `Interrupted By User: ${String(pipeline.interruptedByUser)}`,
+    `Detected At: ${pipeline.bargeIn.detectedAt ?? 'unknown'}`,
+    `Playback Interrupted At: ${pipeline.bargeIn.playbackInterruptedAt ?? 'unknown'}`,
+    `Listening Restarted At: ${pipeline.bargeIn.listeningRestartedAt ?? 'unknown'}`,
+    `Speech During Playback: ${String(pipeline.bargeIn.speechDetectedDuringPlayback)}`,
+    `Playback Stop Succeeded: ${String(pipeline.bargeIn.playbackStopSucceeded ?? 'unknown')}`,
+    `RMS Level: ${pipeline.bargeIn.rmsLevel ?? 'unknown'}`,
+    `Threshold: ${pipeline.bargeIn.threshold ?? 'unknown'}`,
+    `Min Speech Chunks: ${pipeline.bargeIn.minSpeechChunks ?? 'unknown'}`,
   ];
 }
 

@@ -78,6 +78,10 @@ export class OllamaProvider implements LlmProvider {
     this.keepAlive = this.resolveKeepAlive(config.keepAlive);
   }
 
+  public get currentModel(): string {
+    return this.model;
+  }
+
   public async generate(
     messages: LlmMessage[],
     options: LlmGenerateOptions = {},
@@ -88,7 +92,7 @@ export class OllamaProvider implements LlmProvider {
     return this.toLlmMessage(payload);
   }
 
-  public async *stream(
+  public async *generateStream(
     messages: LlmMessage[],
     options: LlmGenerateOptions = {},
   ): AsyncIterable<LlmStreamChunk> {
@@ -119,6 +123,13 @@ export class OllamaProvider implements LlmProvider {
         yield { type: 'done' };
       }
     }
+  }
+
+  public stream(
+    messages: LlmMessage[],
+    options: LlmGenerateOptions = {},
+  ): AsyncIterable<LlmStreamChunk> {
+    return this.generateStream(messages, options);
   }
 
   private normalizeBaseUrl(baseUrl: string): string {

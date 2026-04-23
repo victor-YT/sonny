@@ -11,11 +11,12 @@ import {
 import type {
   LlmMessage,
   LlmProvider,
+  LlmRoutingDecision,
   LlmStreamChunk,
   ToolCall,
 } from './providers/llm.js';
 import { MemoryManager, type MemoryManagerConfig } from '../memory/memory-manager.js';
-import { OllamaProvider } from './providers/ollama.js';
+import { createRoutedLlmProvider } from './providers/llm-registry.js';
 import type {
   ProactiveAgent,
   ProactiveNotification,
@@ -43,6 +44,16 @@ export interface GatewayConfig {
   skillRegistry?: SkillRegistry;
   skillRegistryConfig?: SkillRegistryConfig;
   proactiveAgent?: ProactiveAgent;
+}
+
+export interface GatewayProviderSelectionInfo {
+  sttProvider: string;
+  foregroundLlmProvider: string;
+  backgroundLlmProvider: string;
+  ttsProvider: string;
+  playbackProvider: string;
+  foregroundModel: string;
+  backgroundModel: string;
 }
 
 export class Gateway {
@@ -117,7 +128,31 @@ export class Gateway {
   }
 
   public get currentModel(): string | null {
-    return this.runtimeConfig?.ollama.model ?? readStringProperty(this.llmProvider, 'model');
+    return readStringProperty(this.llmProvider, 'currentModel')
+      ?? this.getLastLlmRoutingDecision()?.model
+      ?? this.runtimeConfig?.foregroundModel
+      ?? this.runtimeConfig?.ollama.model
+      ?? readStringProperty(this.llmProvider, 'model');
+  }
+
+  public getProviderSelections(): GatewayProviderSelectionInfo | null {
+    if (this.runtimeConfig === undefined) {
+      return null;
+    }
+
+    return {
+      sttProvider: this.runtimeConfig.sttProvider,
+      foregroundLlmProvider: this.runtimeConfig.foregroundLlmProvider,
+      backgroundLlmProvider: this.runtimeConfig.backgroundLlmProvider,
+      ttsProvider: this.runtimeConfig.ttsProvider,
+      playbackProvider: this.runtimeConfig.playbackProvider,
+      foregroundModel: this.runtimeConfig.foregroundModel,
+      backgroundModel: this.runtimeConfig.backgroundModel,
+    };
+  }
+
+  public getLastLlmRoutingDecision(): LlmRoutingDecision | null {
+    return this.llmProvider.getLastRoutingDecision?.() ?? null;
   }
 
   public get currentRuntimeConfig(): RuntimeConfig | undefined {
@@ -158,6 +193,7 @@ export class Gateway {
       tools: this.toolRouter.getDefinitions(),
       systemPrompt: contextWindow.systemPrompt,
     });
+    this.logLastLlmRoutingDecision();
 
     while (this.hasToolCalls(response)) {
       this.session.addMessage(response);
@@ -172,6 +208,7 @@ export class Gateway {
         tools: this.toolRouter.getDefinitions(),
         systemPrompt: contextWindow.systemPrompt,
       });
+      this.logLastLlmRoutingDecision();
     }
 
     this.session.addMessage(response);
@@ -206,11 +243,14 @@ export class Gateway {
     options.timingTracker?.start('llm_first_token');
     options.timingTracker?.start('llm_full_response');
 
-    for await (const chunk of this.llmProvider.stream(contextWindow.messages, {
+    const stream = this.llmProvider.generateStream(contextWindow.messages, {
       tools: this.toolRouter.getDefinitions(),
       systemPrompt: contextWindow.systemPrompt,
       signal: options.signal,
-    })) {
+    });
+    this.logLastLlmRoutingDecision();
+
+    for await (const chunk of stream) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
         if (!firstTokenRecorded) {
           firstTokenRecorded = true;
@@ -287,10 +327,7 @@ export class Gateway {
     }
 
     if (runtimeConfig !== undefined) {
-      return new OllamaProvider({
-        baseUrl: runtimeConfig.ollama.baseUrl,
-        model: runtimeConfig.ollama.model,
-      });
+      return createRoutedLlmProvider(runtimeConfig).provider;
     }
 
     throw new Error(
@@ -375,6 +412,18 @@ export class Gateway {
       this.session.addMessage(toolEntry);
       await this.memoryManager.recordMessage(this.session.id, toolEntry);
     }
+  }
+
+  private logLastLlmRoutingDecision(): void {
+    const decision = this.getLastLlmRoutingDecision();
+
+    if (decision === null) {
+      return;
+    }
+
+    console.log(
+      `[gateway] llm route=${decision.lane} provider=${decision.providerId} model=${decision.model ?? 'unknown'} reason=${decision.reason}`,
+    );
   }
 
   private async handleProactiveNotification(

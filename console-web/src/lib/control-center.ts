@@ -74,6 +74,7 @@ export interface LastAudioDebugInfo {
 export interface StageDebugState {
   status: string
   error: string | null
+  updatedAt: string | null
 }
 
 export interface SttDebugInfo {
@@ -85,6 +86,14 @@ export interface SttDebugInfo {
   transcript: string | null
   failureReason: string | null
   rawBodyPreview: string | null
+  streamBytesSent?: number | null
+  streamNonEmptyChunkCount?: number | null
+  streamFirstChunkAt?: string | null
+  streamClosedBeforeFirstChunk?: boolean | null
+  captureEndedBy?: 'silence' | 'max_timeout' | 'manual' | 'abort' | 'unknown' | null
+  firstNonEmptyChunkReceived?: boolean | null
+  endedBeforeFirstChunk?: boolean | null
+  sttRequestSkippedBecauseEmpty?: boolean | null
 }
 
 export interface PipelineLatencyTimestamps {
@@ -95,8 +104,10 @@ export interface PipelineLatencyTimestamps {
   sttFirstChunkAt: string | null
   sttFinishedAt: string | null
   gatewayStartedAt: string | null
+  gatewayFinishedAt: string | null
   firstTokenAt: string | null
   firstSentenceReadyAt: string | null
+  ttsStartedAt: string | null
   ttsRequestStartedAt: string | null
   ttsFirstAudioReadyAt: string | null
   ttsFinishedAt: string | null
@@ -114,6 +125,72 @@ export interface PipelineLatencyDurations {
   ttsFullSynthesisMs: number | null
   stopToFirstSoundMs: number | null
   stopToPlaybackFinishedMs: number | null
+}
+
+export type TurnTimelineStageKey =
+  | 'barge_in_detected'
+  | 'playback_interrupted'
+  | 'listening_restarted'
+  | 'listening'
+  | 'silence_detected'
+  | 'stt'
+  | 'llm'
+  | 'tts'
+  | 'playback'
+  | 'idle'
+
+export type TurnTimelineStageStatus =
+  | 'pending'
+  | 'active'
+  | 'completed'
+  | 'interrupted'
+  | 'failed'
+
+export interface TurnTimelineTimestamps {
+  listeningStartedAt: string | null
+  silenceDetectedAt: string | null
+  sttStartedAt: string | null
+  sttFinishedAt: string | null
+  llmStartedAt: string | null
+  firstTokenAt: string | null
+  llmFinishedAt: string | null
+  ttsStartedAt: string | null
+  ttsFinishedAt: string | null
+  playbackStartedAt: string | null
+  playbackFinishedAt: string | null
+  bargeInDetectedAt: string | null
+  playbackInterruptedAt: string | null
+  listeningRestartedAt: string | null
+  idleStartedAt: string | null
+}
+
+export interface TurnTimelineDurations {
+  listeningDurationMs: number | null
+  silenceToSttMs: number | null
+  sttDurationMs: number | null
+  llmDurationMs: number | null
+  ttsDurationMs: number | null
+  playbackDurationMs: number | null
+  totalTurnDurationMs: number | null
+}
+
+export interface TurnTimelineStage {
+  key: TurnTimelineStageKey
+  label: string
+  status: TurnTimelineStageStatus
+  startAt: string | null
+  endAt: string | null
+  durationMs: number | null
+}
+
+export interface TurnTimelineDebugInfo {
+  currentState: string
+  activeStage: TurnTimelineStageKey | null
+  activeStageLabel: string | null
+  lastCompletedStage: TurnTimelineStageKey | null
+  timestamps: TurnTimelineTimestamps
+  durations: TurnTimelineDurations
+  stages: TurnTimelineStage[]
 }
 
 export interface PipelineDebugInfo {
@@ -136,6 +213,32 @@ export interface PipelineDebugInfo {
     playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown'
     fullTurnSuccess: boolean
   }
+  providers: {
+    sttProvider: string | null
+    foregroundLlmProvider: string | null
+    backgroundLlmProvider: string | null
+    ttsProvider: string | null
+    playbackProvider: string | null
+    foregroundModel: string | null
+    backgroundModel: string | null
+    lastSelectedLlmProvider: string | null
+    lastSelectedModel: string | null
+    lastSelectedLane: 'foreground' | 'background' | null
+    lastRouterReason: string | null
+  }
+  interruptedByUser: boolean
+  bargeIn: {
+    detectedAt: string | null
+    playbackInterruptedAt: string | null
+    listeningRestartedAt: string | null
+    speechDetectedDuringPlayback: boolean
+    playbackStopSucceeded: boolean | null
+    rmsLevel: number | null
+    threshold: number | null
+    minSpeechChunks: number | null
+  }
+  turnTimeline: TurnTimelineDebugInfo
+  endOfTurnReason: 'silence' | 'max_timeout' | 'manual' | 'interrupted' | 'unknown' | null
   latency: {
     timestamps: PipelineLatencyTimestamps
     durations: PipelineLatencyDurations
@@ -146,11 +249,41 @@ export interface RecorderDebugInfo {
   backend: string
   backendPath: string | null
   device: string | null
+  defaultInputDeviceName?: string | null
+  availableInputDevices?: string[]
   usingDefaultDevice: boolean
   backendAvailable: boolean
   spawnStarted: boolean
   firstChunkReceived: boolean
   startTimeoutMs: number
+  bytesCaptured?: number | null
+  captureEndedBy?: 'silence' | 'max_timeout' | 'manual' | 'abort' | 'unknown'
+  endOfTurnReason?: 'silence' | 'max_timeout' | 'manual' | 'interrupted' | 'unknown'
+  firstNonEmptyChunkReceived?: boolean | null
+  endedBeforeFirstChunk?: boolean | null
+  vadRequestCount?: number | null
+  vadSpeechChunkCount?: number | null
+  vadSilenceChunkCount?: number | null
+  vadDroppedChunkCount?: number | null
+  vadSpeechMs?: number | null
+  vadSilenceMs?: number | null
+  speechStarted?: boolean | null
+  silenceDetected?: boolean | null
+  speechThresholdMs?: number | null
+  silenceThresholdMs?: number | null
+  minAutoStopCaptureMs?: number | null
+  micGainDb?: number | null
+  lastChunkRmsLevel?: number | null
+  avgChunkRmsLevel?: number | null
+  maxChunkRmsLevel?: number | null
+  peakAmplitude?: number | null
+  rmsLevel?: number | null
+  silentRatio?: number | null
+  inputAppearsSilent?: boolean | null
+  audioQualityHint?: string | null
+  likelyFailureCause?: string | null
+  captureAborted?: boolean
+  lastCaptureError?: string | null
   lastFailureReason: string | null
   lastSpawnError: string | null
   lastStderr: string | null
@@ -263,6 +396,8 @@ export function describeRuntime(snapshot: RuntimeSnapshot): string {
 export function describeNotice(
   snapshot: RuntimeSnapshot | null,
   connection: ConnectionState,
+  recorder?: RecorderDebugInfo | null,
+  lastAudio?: LastAudioDebugInfo | null,
 ): NoticeState {
   if (connection === 'disconnected') {
     return {
@@ -283,6 +418,14 @@ export function describeNotice(
     return {
       level: 'error',
       message: snapshot.lastError,
+    }
+  }
+
+  if (recorder?.inputAppearsSilent === true || lastAudio?.suspectedSilent === true) {
+    return {
+      level: 'error',
+      message:
+        'No usable microphone input detected. Check macOS microphone permissions and default input device.',
     }
   }
 
@@ -403,6 +546,51 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `playbackMode: ${pipeline.playbackMode}`,
     `playerCommand: ${pipeline.playerCommand ?? 'Unknown'}`,
     '',
+    `sttProvider: ${pipeline.providers.sttProvider ?? 'Unknown'}`,
+    `foregroundLlmProvider: ${pipeline.providers.foregroundLlmProvider ?? 'Unknown'}`,
+    `backgroundLlmProvider: ${pipeline.providers.backgroundLlmProvider ?? 'Unknown'}`,
+    `ttsProvider: ${pipeline.providers.ttsProvider ?? 'Unknown'}`,
+    `playbackProvider: ${pipeline.providers.playbackProvider ?? 'Unknown'}`,
+    `foregroundModel: ${pipeline.providers.foregroundModel ?? 'Unknown'}`,
+    `backgroundModel: ${pipeline.providers.backgroundModel ?? 'Unknown'}`,
+    `lastSelectedLlmProvider: ${pipeline.providers.lastSelectedLlmProvider ?? 'Unknown'}`,
+    `lastSelectedModel: ${pipeline.providers.lastSelectedModel ?? 'Unknown'}`,
+    `lastSelectedLane: ${pipeline.providers.lastSelectedLane ?? 'Unknown'}`,
+    `lastRouterReason: ${pipeline.providers.lastRouterReason ?? 'Unknown'}`,
+    '',
+    `interruptedByUser: ${String(pipeline.interruptedByUser)}`,
+    `bargeInDetectedAt: ${pipeline.bargeIn.detectedAt ?? 'Unknown'}`,
+    `playbackInterruptedAt: ${pipeline.bargeIn.playbackInterruptedAt ?? 'Unknown'}`,
+    `listeningRestartedAt: ${pipeline.bargeIn.listeningRestartedAt ?? 'Unknown'}`,
+    `speechDetectedDuringPlayback: ${String(pipeline.bargeIn.speechDetectedDuringPlayback)}`,
+    `playbackStopSucceeded: ${String(pipeline.bargeIn.playbackStopSucceeded ?? 'Unknown')}`,
+    `bargeInRmsLevel: ${formatMetric(pipeline.bargeIn.rmsLevel)}`,
+    `bargeInThreshold: ${formatMetric(pipeline.bargeIn.threshold)}`,
+    `bargeInMinSpeechChunks: ${
+      pipeline.bargeIn.minSpeechChunks === null ? 'Unknown' : String(pipeline.bargeIn.minSpeechChunks)
+    }`,
+    '',
+    `sttStreamBytesSent: ${String(pipeline.sttDebug.streamBytesSent ?? 'Unknown')}`,
+    `sttStreamNonEmptyChunkCount: ${String(pipeline.sttDebug.streamNonEmptyChunkCount ?? 'Unknown')}`,
+    `sttStreamFirstChunkAt: ${pipeline.sttDebug.streamFirstChunkAt ?? 'Unknown'}`,
+    `sttStreamClosedBeforeFirstChunk: ${String(pipeline.sttDebug.streamClosedBeforeFirstChunk ?? 'Unknown')}`,
+    `sttCaptureEndedBy: ${pipeline.sttDebug.captureEndedBy ?? 'Unknown'}`,
+    `sttFirstNonEmptyChunkReceived: ${String(pipeline.sttDebug.firstNonEmptyChunkReceived ?? 'Unknown')}`,
+    `sttEndedBeforeFirstChunk: ${String(pipeline.sttDebug.endedBeforeFirstChunk ?? 'Unknown')}`,
+    `sttRequestSkippedBecauseEmpty: ${String(pipeline.sttDebug.sttRequestSkippedBecauseEmpty ?? 'Unknown')}`,
+    `endOfTurnReason: ${pipeline.endOfTurnReason ?? 'Unknown'}`,
+    '',
+    `timelineCurrentState: ${pipeline.turnTimeline.currentState}`,
+    `timelineActiveStage: ${pipeline.turnTimeline.activeStageLabel ?? 'Unknown'}`,
+    `timelineLastCompletedStage: ${pipeline.turnTimeline.lastCompletedStage ?? 'Unknown'}`,
+    `timelineListeningDurationMs: ${formatDuration(pipeline.turnTimeline.durations.listeningDurationMs)}`,
+    `timelineSilenceToSttMs: ${formatDuration(pipeline.turnTimeline.durations.silenceToSttMs)}`,
+    `timelineSttDurationMs: ${formatDuration(pipeline.turnTimeline.durations.sttDurationMs)}`,
+    `timelineLlmDurationMs: ${formatDuration(pipeline.turnTimeline.durations.llmDurationMs)}`,
+    `timelineTtsDurationMs: ${formatDuration(pipeline.turnTimeline.durations.ttsDurationMs)}`,
+    `timelinePlaybackDurationMs: ${formatDuration(pipeline.turnTimeline.durations.playbackDurationMs)}`,
+    `timelineTotalTurnDurationMs: ${formatDuration(pipeline.turnTimeline.durations.totalTurnDurationMs)}`,
+    '',
     `micStartAt: ${pipeline.latency.timestamps.micStartAt ?? 'Unknown'}`,
     `silenceDetectedAt: ${pipeline.latency.timestamps.silenceDetectedAt ?? 'Unknown'}`,
     `stopListeningAt: ${pipeline.latency.timestamps.stopListeningAt ?? 'Unknown'}`,
@@ -410,8 +598,10 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `sttFirstChunkAt: ${pipeline.latency.timestamps.sttFirstChunkAt ?? 'Unknown'}`,
     `sttFinishedAt: ${pipeline.latency.timestamps.sttFinishedAt ?? 'Unknown'}`,
     `gatewayStartedAt: ${pipeline.latency.timestamps.gatewayStartedAt ?? 'Unknown'}`,
+    `gatewayFinishedAt: ${pipeline.latency.timestamps.gatewayFinishedAt ?? 'Unknown'}`,
     `firstTokenAt: ${pipeline.latency.timestamps.firstTokenAt ?? 'Unknown'}`,
     `firstSentenceReadyAt: ${pipeline.latency.timestamps.firstSentenceReadyAt ?? 'Unknown'}`,
+    `ttsStartedAt: ${pipeline.latency.timestamps.ttsStartedAt ?? 'Unknown'}`,
     `ttsRequestStartedAt: ${pipeline.latency.timestamps.ttsRequestStartedAt ?? 'Unknown'}`,
     `ttsFirstAudioReadyAt: ${pipeline.latency.timestamps.ttsFirstAudioReadyAt ?? 'Unknown'}`,
     `ttsFinishedAt: ${pipeline.latency.timestamps.ttsFinishedAt ?? 'Unknown'}`,
@@ -426,6 +616,7 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `ttsToFirstAudioMs: ${formatDuration(pipeline.latency.durations.ttsToFirstAudioMs)}`,
     `ttsFullSynthesisMs: ${formatDuration(pipeline.latency.durations.ttsFullSynthesisMs)}`,
     `stopToFirstSoundMs: ${formatDuration(pipeline.latency.durations.stopToFirstSoundMs)}`,
+    `stopToFirstSoundTarget: ${formatLatencyTarget(pipeline.latency.durations.stopToFirstSoundMs, 1000)}`,
     `stopToPlaybackFinishedMs: ${formatDuration(pipeline.latency.durations.stopToPlaybackFinishedMs)}`,
     '',
     `Verdict STT Partials: ${pipeline.verdict.sttPartials ? 'yes' : 'no'}`,
@@ -436,6 +627,17 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `Verdict Playback Mode: ${pipeline.verdict.playbackMode}`,
     `Verdict Full Turn Success: ${pipeline.verdict.fullTurnSuccess ? 'yes' : 'no'}`,
   ].join('\n')
+}
+
+function formatLatencyTarget(
+  value: number | null | undefined,
+  targetMs: number,
+): string {
+  if (value === null || value === undefined) {
+    return `Pending <= ${targetMs}ms`
+  }
+
+  return value <= targetMs ? `PASS <= ${targetMs}ms` : `MISS > ${targetMs}ms`
 }
 
 export function buildSttDebug(pipeline: PipelineDebugInfo | null): string {
@@ -455,6 +657,14 @@ export function buildSttDebug(pipeline: PipelineDebugInfo | null): string {
     `Transcript Length: ${String(pipeline.sttDebug.transcriptLength ?? 'Unknown')}`,
     `Transcript: ${pipeline.sttDebug.transcript ?? 'None'}`,
     `Failure Reason: ${pipeline.sttDebug.failureReason ?? 'None'}`,
+    `Stream Bytes Sent: ${String(pipeline.sttDebug.streamBytesSent ?? 'Unknown')}`,
+    `Stream Non-Empty Chunks: ${String(pipeline.sttDebug.streamNonEmptyChunkCount ?? 'Unknown')}`,
+    `Stream First Chunk At: ${pipeline.sttDebug.streamFirstChunkAt ?? 'Unknown'}`,
+    `Stream Closed Before First Chunk: ${String(pipeline.sttDebug.streamClosedBeforeFirstChunk ?? 'Unknown')}`,
+    `Capture Ended By: ${pipeline.sttDebug.captureEndedBy ?? 'Unknown'}`,
+    `First Non-Empty Chunk Received: ${String(pipeline.sttDebug.firstNonEmptyChunkReceived ?? 'Unknown')}`,
+    `Ended Before First Chunk: ${String(pipeline.sttDebug.endedBeforeFirstChunk ?? 'Unknown')}`,
+    `STT Request Skipped Because Empty: ${String(pipeline.sttDebug.sttRequestSkippedBecauseEmpty ?? 'Unknown')}`,
     '',
     'Raw Body:',
     pipeline.sttDebug.rawBodyPreview ?? 'None',
@@ -469,13 +679,47 @@ export function buildRecorderDebug(recorder: RecorderDebugInfo | null): string {
   return [
     `Backend: ${recorder.backend}`,
     `Backend Path: ${recorder.backendPath ?? 'Not found'}`,
-    `Input Device: ${recorder.device ?? 'Unknown/default'}`,
+    `Selected Input Device: ${recorder.device ?? 'Unknown/default'}`,
+    `Default Input Device: ${recorder.defaultInputDeviceName ?? 'Unknown'}`,
+    `Available Input Devices: ${
+      recorder.availableInputDevices?.length
+        ? recorder.availableInputDevices.join(', ')
+        : 'Unknown'
+    }`,
     `Default Device: ${String(recorder.usingDefaultDevice)}`,
     `Available: ${String(recorder.backendAvailable)}`,
     `Spawn Started: ${String(recorder.spawnStarted)}`,
     `First Chunk Received: ${String(recorder.firstChunkReceived)}`,
     `Start Timeout: ${recorder.startTimeoutMs}ms`,
+    `Bytes Captured: ${String(recorder.bytesCaptured ?? 'Unknown')}`,
+    `Capture Ended By: ${recorder.captureEndedBy ?? 'Unknown'}`,
+    `End Of Turn Reason: ${recorder.endOfTurnReason ?? 'Unknown'}`,
+    `First Non-Empty Chunk Received: ${String(recorder.firstNonEmptyChunkReceived ?? 'Unknown')}`,
+    `Ended Before First Chunk: ${String(recorder.endedBeforeFirstChunk ?? 'Unknown')}`,
+    `VAD Request Count: ${String(recorder.vadRequestCount ?? 'Unknown')}`,
+    `VAD Speech Chunks: ${String(recorder.vadSpeechChunkCount ?? 'Unknown')}`,
+    `VAD Silence Chunks: ${String(recorder.vadSilenceChunkCount ?? 'Unknown')}`,
+    `VAD Dropped Chunks: ${String(recorder.vadDroppedChunkCount ?? 'Unknown')}`,
+    `VAD Speech Ms: ${String(recorder.vadSpeechMs ?? 'Unknown')}`,
+    `VAD Silence Ms: ${String(recorder.vadSilenceMs ?? 'Unknown')}`,
+    `Speech Started: ${String(recorder.speechStarted ?? 'Unknown')}`,
+    `Silence Detected: ${String(recorder.silenceDetected ?? 'Unknown')}`,
+    `Speech Threshold Ms: ${String(recorder.speechThresholdMs ?? 'Unknown')}`,
+    `Silence Threshold Ms: ${String(recorder.silenceThresholdMs ?? 'Unknown')}`,
+    `Min Auto Stop Capture Ms: ${String(recorder.minAutoStopCaptureMs ?? 'Unknown')}`,
+    `Mic Gain dB: ${String(recorder.micGainDb ?? 'Unknown')}`,
+    `Last Chunk RMS Level: ${formatMetric(recorder.lastChunkRmsLevel ?? null)}`,
+    `Average Chunk RMS Level: ${formatMetric(recorder.avgChunkRmsLevel ?? null)}`,
+    `Max Chunk RMS Level: ${formatMetric(recorder.maxChunkRmsLevel ?? null)}`,
+    `Peak Amplitude: ${formatMetric(recorder.peakAmplitude ?? null)}`,
+    `RMS Level: ${formatMetric(recorder.rmsLevel ?? null)}`,
+    `Silent Ratio: ${formatMetric(recorder.silentRatio ?? null)}`,
+    `Input Appears Silent: ${String(recorder.inputAppearsSilent ?? 'Unknown')}`,
+    `Audio Quality Hint: ${recorder.audioQualityHint ?? 'Unknown'}`,
+    `Capture Aborted: ${String(recorder.captureAborted ?? false)}`,
     `Last Failure Reason: ${recorder.lastFailureReason ?? 'None'}`,
+    `Likely Failure Cause: ${recorder.likelyFailureCause ?? 'None'}`,
+    `Last Capture Error: ${recorder.lastCaptureError ?? 'None'}`,
     `Last Spawn Error: ${recorder.lastSpawnError ?? 'None'}`,
     `Last Stderr: ${recorder.lastStderr ?? 'None'}`,
     `Mic Permission Hint: ${recorder.micPermissionHint ?? 'None'}`,

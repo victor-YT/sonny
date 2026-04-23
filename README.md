@@ -43,7 +43,7 @@ It works without live microphone input and prints transcript output, latency fie
 - Streaming voice pipeline with STT, LLM, TTS, and speaker playback
 - Emotion-aware response processing for speech
 - Minimal tray host
-- Localhost control center on port `3000`
+- Localhost control center on port `3001`
 - Diagnostics and latency instrumentation
 - No-microphone simulation path for pipeline validation
 - Built-in tool/skill system with permission levels
@@ -155,6 +155,7 @@ OLLAMA_KEEP_ALIVE=-1
 PORCUPINE_ACCESS_KEY=replace-me
 FASTER_WHISPER_URL=http://127.0.0.1:8000
 CHATTERBOX_URL=http://127.0.0.1:8001
+VAD_URL=http://127.0.0.1:8003
 SONNY_VOICE_MODE=0
 ```
 
@@ -165,16 +166,18 @@ Important values:
 - `PORCUPINE_ACCESS_KEY`: required only for wake-word experiments
 - `FASTER_WHISPER_URL`: STT service URL
 - `CHATTERBOX_URL`: TTS service URL
+- `VAD_URL`: end-of-turn VAD service URL
 - `SONNY_VOICE_MODE`: `0`/`false` for non-voice startup, `1`/`true` for voice runtime startup
 
 `config/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and `.local/` for machine-local runtime data.
 
 ### Python Services Setup
 
-Sonny expects two local HTTP services for voice mode:
+Sonny expects three local HTTP services for voice mode and starts them automatically when they are not already healthy:
 
 - faster-whisper on `http://127.0.0.1:8000`
 - Qwen3-TTS on `http://127.0.0.1:8001`
+- VAD on `http://127.0.0.1:8003`
 
 The runtime still uses the compatibility name `CHATTERBOX_URL` for the TTS endpoint, but the bundled server script is `scripts/qwen3-tts-server.py`.
 
@@ -250,10 +253,11 @@ That starts:
 The primary UI is:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3001
 ```
 
 Sonny prints the control center URL on startup. The terminal is no longer the primary interaction surface.
+Set `SONNY_CONSOLE_PORT` if you need a different localhost port.
 
 #### Voice mode setup
 
@@ -283,6 +287,13 @@ In voice mode Sonny:
 Optional voice-related environment overrides supported by `src/voice/voice-gateway.ts` include:
 
 - `SONNY_WAKE_WORDS`
+- `SONNY_STT_PROVIDER`
+- `SONNY_FOREGROUND_LLM_PROVIDER`
+- `SONNY_BACKGROUND_LLM_PROVIDER`
+- `SONNY_TTS_PROVIDER`
+- `SONNY_PLAYBACK_PROVIDER`
+- `SONNY_FOREGROUND_MODEL`
+- `SONNY_BACKGROUND_MODEL`
 - `SONNY_STT_LANGUAGE`
 - `SONNY_TTS_VOICE`
 - `SONNY_WAKE_WORD_SENSITIVITY`
@@ -290,6 +301,15 @@ Optional voice-related environment overrides supported by `src/voice/voice-gatew
 - `SONNY_MIC_SILENCE_SECONDS`
 - `SONNY_MIC_MAX_CAPTURE_MS`
 - `SONNY_MIC_RECORD_PROGRAM`
+- `SONNY_MIC_GAIN_DB`
+- `SONNY_VAD_BASE_URL`
+- `VAD_URL`
+
+Provider resolution can be inspected with:
+
+```bash
+pnpm run voice:providers
+```
 
 #### Desktop host behavior
 
@@ -321,7 +341,7 @@ That compiles `src/` plus `tests/` with `tsconfig.test.json` and runs:
 
 - Startup validation fails: copy `.env.example` to `.env` and fill in the missing values called out in the error message.
 - Ollama requests fail: make sure `ollama serve` is running and `OLLAMA_BASE_URL` matches it.
-- Voice mode starts but STT/TTS calls fail: confirm the local services are running on `8000` and `8001`, or update `FASTER_WHISPER_URL` and `CHATTERBOX_URL`.
+- Voice mode starts but STT/TTS/VAD calls fail: confirm the local services are running on `8000`, `8001`, and `8003`, or update `FASTER_WHISPER_URL`, `CHATTERBOX_URL`, and `VAD_URL`.
 - TTS server exits immediately: install `fastapi`, `uvicorn`, `numpy`, `torch`, and `qwen-tts` in the Python environment used to launch `scripts/qwen3-tts-server.py`.
 - Microphone capture fails with a missing module error: Sonny loads `node-record-lpcm16` at runtime. Install it with `pnpm add node-record-lpcm16` if your environment does not already provide it.
 - Wake-word experiments never trigger: verify `PORCUPINE_ACCESS_KEY`, check your microphone permissions, and lower `SONNY_WAKE_WORD_SENSITIVITY` only if you are getting false positives rather than misses.

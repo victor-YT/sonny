@@ -24,6 +24,7 @@
     "voice:simulate": "pnpm run voice:file",
     "voice:latency": "pnpm run build && node dist/dev/voice-latency-benchmark.js",
     "voice:smoke": "pnpm run build && node dist/dev/voice-smoke.js",
+    "voice:providers": "pnpm run build && node dist/dev/provider-status.js",
     "lint": "eslint src/"
   },
   "keywords": [],

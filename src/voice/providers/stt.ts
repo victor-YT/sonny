@@ -4,7 +4,8 @@ export type SttFailureReason =
   | 'stt_http_error'
   | 'stt_invalid_json'
   | 'stt_unrecognized_payload_shape'
-  | 'stt_empty_transcript';
+  | 'stt_empty_transcript'
+  | 'stt_empty_audio';
 
 export interface SttDebugInfo {
   requestUrl: string | null;
@@ -15,6 +16,14 @@ export interface SttDebugInfo {
   transcript: string | null;
   transcriptLength: number | null;
   failureReason: SttFailureReason | null;
+  streamBytesSent?: number | null;
+  streamNonEmptyChunkCount?: number | null;
+  streamFirstChunkAt?: string | null;
+  streamClosedBeforeFirstChunk?: boolean | null;
+  captureEndedBy?: 'silence' | 'max_timeout' | 'manual' | 'abort' | 'unknown' | null;
+  firstNonEmptyChunkReceived?: boolean | null;
+  endedBeforeFirstChunk?: boolean | null;
+  sttRequestSkippedBecauseEmpty?: boolean | null;
 }
 
 export interface SttResult {
@@ -35,10 +44,24 @@ export interface SttProvider {
   transcribe(audio: Buffer, options?: SttOptions): Promise<SttResult>;
   supportsStreaming: boolean;
   getLastDebugInfo?(): SttDebugInfo | null;
+  transcribeStream?(
+    audioStream: AsyncIterable<Buffer>,
+    options?: SttOptions,
+  ): AsyncIterable<SttResult>;
   streamTranscribe?(
     audioStream: AsyncIterable<Buffer>,
     options?: SttOptions,
   ): AsyncIterable<SttResult>;
+}
+
+export interface StreamingSttDebugContext {
+  source: 'live-mic';
+  streamBytesSent: number;
+  streamNonEmptyChunkCount: number;
+  captureEndedBy: 'silence' | 'max_timeout' | 'manual' | 'abort' | 'unknown';
+  firstNonEmptyChunkReceived: boolean;
+  endedBeforeFirstChunk: boolean;
+  sttRequestSkippedBecauseEmpty: boolean;
 }
 
 export interface SttOptions {
@@ -48,4 +71,5 @@ export interface SttOptions {
   channels?: number;
   encoding?: 'wav' | 'pcm_s16le';
   timingTracker?: TimingTracker;
+  streamingDebug?: StreamingSttDebugContext;
 }

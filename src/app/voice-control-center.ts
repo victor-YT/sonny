@@ -1,5 +1,6 @@
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import { Gateway } from '../core/gateway.js';
+import { resolveRuntimeConfigFromEnvironment } from '../core/runtime-config-resolution.js';
 import { RuntimeStateStore } from '../core/runtime-state.js';
 import {
   loadStartupEnvironment,
@@ -32,15 +33,9 @@ export interface VoiceControlCenterRuntime {
 
 export async function startVoiceControlCenter(): Promise<VoiceControlCenterRuntime> {
   const startupEnvironment = loadStartupEnvironment(process.env);
-  const runtimeConfig = loadConfig();
+  const runtimeConfig = resolveRuntimeConfigFromEnvironment(loadConfig(), process.env);
   const gateway = new Gateway({
-    runtimeConfig: {
-      ...runtimeConfig,
-      ollama: {
-        baseUrl: startupEnvironment.ollamaBaseUrl,
-        model: startupEnvironment.ollamaModel,
-      },
-    },
+    runtimeConfig,
     sessionConfig: {
       systemPrompt: SYSTEM_PROMPT,
     },
@@ -66,7 +61,7 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
             : `${runtimeConfig.voice.porcupine.url.replace(/\/+$/u, '')}/health`,
       },
       vad: {
-        url: `${(process.env.VAD_URL ?? 'http://127.0.0.1:8003').replace(/\/+$/u, '')}/health`,
+        url: `${(voiceEnvironmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003').replace(/\/+$/u, '')}/health`,
       },
     },
   });

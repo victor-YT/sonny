@@ -78,7 +78,7 @@ export class Qwen3TTSProvider implements TtsProvider {
     }
   }
 
-  public async *streamSynthesize(
+  public async *synthesizeStream(
     text: string,
     options: TtsOptions = {},
   ): AsyncIterable<Buffer> {
@@ -101,6 +101,13 @@ export class Qwen3TTSProvider implements TtsProvider {
 
       yield buffer;
     }
+  }
+
+  public streamSynthesize(
+    text: string,
+    options: TtsOptions = {},
+  ): AsyncIterable<Buffer> {
+    return this.synthesizeStream(text, options);
   }
 
   private normalizeBaseUrl(baseUrl: string): string {

@@ -40,7 +40,7 @@ class StreamingLlmStub implements LlmProvider {
     throw new Error('generate() should not be used in this streaming gateway test');
   }
 
-  public async *stream(
+  public async *generateStream(
     messages: LlmMessage[],
     options?: LlmGenerateOptions,
   ): AsyncIterable<LlmStreamChunk> {
@@ -60,6 +60,13 @@ class StreamingLlmStub implements LlmProvider {
     yield {
       type: 'done',
     };
+  }
+
+  public stream(
+    messages: LlmMessage[],
+    options?: LlmGenerateOptions,
+  ): AsyncIterable<LlmStreamChunk> {
+    return this.generateStream(messages, options);
   }
 }
 

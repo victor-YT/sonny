@@ -23,16 +23,31 @@ export interface LlmStreamChunk {
   toolCall?: ToolCall;
 }
 
+export interface LlmRoutingDecision {
+  lane: 'foreground' | 'background';
+  providerId: string;
+  providerName: string;
+  model: string | null;
+  reason: string;
+  timestamp: string;
+}
+
 export interface LlmProvider {
   readonly name: string;
+  readonly currentModel?: string | null;
   generate(
     messages: LlmMessage[],
     options?: LlmGenerateOptions,
   ): Promise<LlmMessage>;
-  stream(
+  generateStream(
     messages: LlmMessage[],
     options?: LlmGenerateOptions,
   ): AsyncIterable<LlmStreamChunk>;
+  stream?(
+    messages: LlmMessage[],
+    options?: LlmGenerateOptions,
+  ): AsyncIterable<LlmStreamChunk>;
+  getLastRoutingDecision?(): LlmRoutingDecision | null;
 }
 
 export interface LlmGenerateOptions {

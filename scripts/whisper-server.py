@@ -6,21 +6,41 @@ import os
 import tempfile
 import wave
 from pathlib import Path
+from time import perf_counter
 from typing import Any, AsyncIterator
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from faster_whisper import WhisperModel
+from starlette.requests import ClientDisconnect
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MODEL_NAME = "small"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_DEVICE = "auto"
-DEFAULT_STREAM_CHUNK_BYTES = 32_000
+DEFAULT_STREAM_CHUNK_BYTES = 64_000
 DEFAULT_STREAM_SAMPLE_RATE = 16_000
 DEFAULT_STREAM_CHANNELS = 1
+DEFAULT_VAD_FILTER = False
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    return default
 
 
 class WhisperService:
@@ -32,6 +52,7 @@ class WhisperService:
             "FASTER_WHISPER_COMPUTE_TYPE",
             DEFAULT_COMPUTE_TYPE,
         )
+        self.vad_filter = _read_bool_env("FASTER_WHISPER_VAD_FILTER", DEFAULT_VAD_FILTER)
 
     @property
     def model(self) -> WhisperModel:
@@ -64,7 +85,7 @@ class WhisperService:
                 str(temp_path),
                 beam_size=1,
                 best_of=1,
-                vad_filter=True,
+                vad_filter=self.vad_filter,
                 language=language,
                 initial_prompt=prompt,
             )
@@ -78,6 +99,20 @@ class WhisperService:
             if segment.text.strip()
         ).strip()
         confidence = self._estimate_confidence(materialized_segments)
+
+        if len(text) == 0:
+            print(
+                "[voice] whisper: empty transcript "
+                + json.dumps(
+                    {
+                        "audio_bytes": len(audio_bytes),
+                        "suffix": suffix,
+                        "vad_filter": self.vad_filter,
+                    },
+                    ensure_ascii=True,
+                ),
+                flush=True,
+            )
 
         return {
             "text": text,
@@ -118,6 +153,7 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "model": service.model_name,
+        "vad_filter": str(service.vad_filter).lower(),
     }
 
 
@@ -167,61 +203,134 @@ async def _stream_transcription(
     buffer = bytearray()
     emitted_text = ""
     last_processed_size = 0
+    request_started_at = perf_counter()
+    total_bytes_received = 0
+    encoding = _read_audio_encoding(request.headers.get("x-audio-encoding"))
+    sample_rate_hertz = _read_integer_header(
+        request.headers.get("x-sample-rate-hertz"),
+        DEFAULT_STREAM_SAMPLE_RATE,
+    )
+    channels = _read_integer_header(
+        request.headers.get("x-audio-channels"),
+        DEFAULT_STREAM_CHANNELS,
+    )
+    pending_snapshot_task: asyncio.Task[tuple[dict[str, Any], float]] | None = None
+    client_disconnected = False
 
-    async for chunk in request.stream():
-        if not chunk:
-            continue
+    _log_stream_event(
+        "request stream started",
+        encoding=encoding,
+        sample_rate_hertz=sample_rate_hertz,
+        channels=channels,
+    )
 
-        buffer.extend(chunk)
+    async def flush_pending_snapshot() -> dict[str, Any] | None:
+        nonlocal pending_snapshot_task
 
-        if len(buffer) - last_processed_size < DEFAULT_STREAM_CHUNK_BYTES:
-            continue
+        if pending_snapshot_task is None:
+            return None
 
-        last_processed_size = len(buffer)
-        payload = await _transcribe_snapshot(
-            _prepare_audio_bytes(
-                bytes(buffer),
-                encoding=_read_audio_encoding(request.headers.get("x-audio-encoding")),
-                sample_rate_hertz=_read_integer_header(
-                    request.headers.get("x-sample-rate-hertz"),
-                    DEFAULT_STREAM_SAMPLE_RATE,
+        payload, duration_ms = await pending_snapshot_task
+        pending_snapshot_task = None
+        _log_stream_event(
+            "snapshot finished",
+            text_length=len(payload.get("text", "")),
+            duration_ms=duration_ms,
+            final=bool(payload.get("final", False)),
+        )
+        return payload
+
+    def start_snapshot(snapshot_bytes: bytes, *, final: bool) -> None:
+        nonlocal pending_snapshot_task
+        snapshot_label = "final" if final else "partial"
+        _log_stream_event(
+            "snapshot started",
+            snapshot_type=snapshot_label,
+            audio_bytes=len(snapshot_bytes),
+            total_bytes_received=total_bytes_received,
+        )
+        pending_snapshot_task = asyncio.create_task(
+            _transcribe_snapshot_with_metrics(
+                _prepare_audio_bytes(
+                    snapshot_bytes,
+                    encoding=encoding,
+                    sample_rate_hertz=sample_rate_hertz,
+                    channels=channels,
                 ),
-                channels=_read_integer_header(
-                    request.headers.get("x-audio-channels"),
-                    DEFAULT_STREAM_CHANNELS,
-                ),
+                suffix=suffix,
+                language=language,
+                prompt=prompt,
+                final=final,
             ),
-            suffix=suffix,
-            language=language,
-            prompt=prompt,
         )
 
-        if payload["text"] and payload["text"] != emitted_text:
-            emitted_text = payload["text"]
-            payload["final"] = False
-            yield _encode_ndjson(payload)
+    try:
+        async for chunk in request.stream():
+            if pending_snapshot_task is not None and pending_snapshot_task.done():
+                payload = await flush_pending_snapshot()
+
+                if (
+                    payload is not None and
+                    payload["text"] and
+                    payload["text"] != emitted_text
+                ):
+                    emitted_text = payload["text"]
+                    yield _encode_ndjson(payload)
+
+            if not chunk:
+                continue
+
+            buffer.extend(chunk)
+            total_bytes_received += len(chunk)
+            _log_stream_event(
+                "bytes received so far",
+                total_bytes_received=total_bytes_received,
+            )
+
+            if pending_snapshot_task is not None:
+                continue
+
+            if len(buffer) - last_processed_size < DEFAULT_STREAM_CHUNK_BYTES:
+                continue
+
+            last_processed_size = len(buffer)
+            start_snapshot(bytes(buffer), final=False)
+    except ClientDisconnect:
+        client_disconnected = True
+        _log_stream_event(
+            "client disconnect",
+            total_bytes_received=total_bytes_received,
+            buffered_bytes=len(buffer),
+            elapsed_ms=round((perf_counter() - request_started_at) * 1000, 2),
+        )
+
+    pending_payload = await flush_pending_snapshot()
+
+    if (
+        pending_payload is not None and
+        pending_payload["text"] and
+        pending_payload["text"] != emitted_text
+    ):
+        emitted_text = pending_payload["text"]
+        yield _encode_ndjson(pending_payload)
 
     if len(buffer) == 0:
-        raise HTTPException(status_code=400, detail="Audio payload is empty")
+        _log_stream_event(
+            "request stream ended without audio",
+            client_disconnected=client_disconnected,
+        )
+        return
 
-    final_payload = await _transcribe_snapshot(
-        _prepare_audio_bytes(
-            bytes(buffer),
-            encoding=_read_audio_encoding(request.headers.get("x-audio-encoding")),
-            sample_rate_hertz=_read_integer_header(
-                request.headers.get("x-sample-rate-hertz"),
-                DEFAULT_STREAM_SAMPLE_RATE,
-            ),
-            channels=_read_integer_header(
-                request.headers.get("x-audio-channels"),
-                DEFAULT_STREAM_CHANNELS,
-            ),
-        ),
-        suffix=suffix,
-        language=language,
-        prompt=prompt,
+    _log_stream_event(
+        "final transcript attempt after disconnect" if client_disconnected else "final transcript attempt",
+        total_bytes_received=total_bytes_received,
+        buffered_bytes=len(buffer),
     )
-    final_payload["final"] = True
+    start_snapshot(bytes(buffer), final=True)
+    final_payload = await flush_pending_snapshot()
+
+    if final_payload is None:
+        return
 
     if final_payload["text"] != emitted_text or emitted_text == "":
         yield _encode_ndjson(final_payload)
@@ -244,6 +353,25 @@ async def _transcribe_snapshot(
         language=language,
         prompt=prompt,
     )
+
+
+async def _transcribe_snapshot_with_metrics(
+    audio_bytes: bytes,
+    *,
+    suffix: str,
+    language: str | None,
+    prompt: str | None,
+    final: bool,
+) -> tuple[dict[str, Any], float]:
+    started_at = perf_counter()
+    payload = await _transcribe_snapshot(
+        audio_bytes,
+        suffix=suffix,
+        language=language,
+        prompt=prompt,
+    )
+    payload["final"] = final
+    return payload, round((perf_counter() - started_at) * 1000, 2)
 
 
 async def _read_audio_payload(
@@ -328,6 +456,19 @@ def _read_audio_encoding(value: str | None) -> str:
 
 def _encode_ndjson(payload: dict[str, Any]) -> bytes:
     return f"{json.dumps(payload, ensure_ascii=True)}\n".encode("utf-8")
+
+
+def _log_stream_event(message: str, **fields: Any) -> None:
+    payload = {
+        key: value
+        for key, value in fields.items()
+        if value is not None
+    }
+    print(
+        f"[voice] whisper-stream: {message}"
+        + (f" {json.dumps(payload, ensure_ascii=True, default=str)}" if payload else ""),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

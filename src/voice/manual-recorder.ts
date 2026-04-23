@@ -41,11 +41,49 @@ export interface RecorderDebugInfo {
   backend: string;
   backendPath: string | null;
   backendAvailable: boolean;
+  command: string | null;
+  args: string[];
+  inputSource: string | null;
+  requestedSampleRateHertz: number | null;
+  requestedChannels: number | null;
+  outputFormat: string | null;
+  outputTransport: string | null;
+  debugMode: string | null;
   device: string | null;
+  defaultInputDeviceName?: string | null;
+  availableInputDevices?: string[];
   usingDefaultDevice: boolean;
   spawnStarted: boolean;
   firstChunkReceived: boolean;
   startTimeoutMs: number;
+  bytesCaptured?: number | null;
+  captureEndedBy?: 'silence' | 'max_timeout' | 'manual' | 'abort' | 'unknown';
+  endOfTurnReason?: 'silence' | 'max_timeout' | 'manual' | 'interrupted' | 'unknown';
+  firstNonEmptyChunkReceived?: boolean | null;
+  endedBeforeFirstChunk?: boolean | null;
+  vadRequestCount?: number | null;
+  vadSpeechChunkCount?: number | null;
+  vadSilenceChunkCount?: number | null;
+  vadDroppedChunkCount?: number | null;
+  vadSpeechMs?: number | null;
+  vadSilenceMs?: number | null;
+  speechStarted?: boolean | null;
+  silenceDetected?: boolean | null;
+  speechThresholdMs?: number | null;
+  silenceThresholdMs?: number | null;
+  minAutoStopCaptureMs?: number | null;
+  micGainDb?: number | null;
+  lastChunkRmsLevel?: number | null;
+  avgChunkRmsLevel?: number | null;
+  maxChunkRmsLevel?: number | null;
+  peakAmplitude?: number | null;
+  rmsLevel?: number | null;
+  silentRatio?: number | null;
+  inputAppearsSilent?: boolean | null;
+  audioQualityHint?: string | null;
+  likelyFailureCause?: string | null;
+  captureAborted?: boolean;
+  lastCaptureError?: string | null;
   lastStderr: string | null;
   lastSpawnError: string | null;
   lastFailureReason: RecorderFailureReason | null;
@@ -589,6 +627,14 @@ function createRecorderDebugInfo(
     backend: config.recorder,
     backendPath: null,
     backendAvailable: false,
+    command: null,
+    args: [],
+    inputSource: config.device ?? '-d',
+    requestedSampleRateHertz: config.sampleRateHertz,
+    requestedChannels: config.channels,
+    outputFormat: config.audioType ?? 'wav',
+    outputTransport: 'stdout_stream',
+    debugMode: null,
     device: config.device ?? 'default',
     usingDefaultDevice:
       config.device === undefined ||

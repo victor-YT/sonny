@@ -183,6 +183,87 @@ test('FasterWhisperProvider streams NDJSON transcript updates', async () => {
         segments: undefined,
       },
     ]);
+
+    const debug = provider.getLastDebugInfo();
+    assert.equal(debug?.streamBytesSent, Buffer.concat(audioChunks).byteLength);
+    assert.equal(debug?.streamNonEmptyChunkCount, audioChunks.length);
+    assert.equal(debug?.streamClosedBeforeFirstChunk, false);
+    assert.ok(
+      typeof debug?.streamFirstChunkAt === 'string' && debug.streamFirstChunkAt.length > 0,
+      'expected streamFirstChunkAt ISO timestamp',
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('FasterWhisperProvider rejects with stt_empty_audio when the stream is empty', async () => {
+  let serverReceivedRequest = false;
+
+  const server = await startServer(async (_request, response) => {
+    serverReceivedRequest = true;
+    response.statusCode = 400;
+    response.end('should not have been called');
+  });
+
+  async function* createEmptyStream(): AsyncIterable<Buffer> {
+    // yields nothing
+  }
+
+  try {
+    const provider = new FasterWhisperProvider({ baseUrl: server.baseUrl });
+
+    await assert.rejects(
+      (async () => {
+        for await (const _ of provider.streamTranscribe(createEmptyStream())) {
+          // drain
+        }
+      })(),
+      /stt_empty_audio:/,
+    );
+
+    assert.equal(serverReceivedRequest, false, 'whisper server must not be called on empty stream');
+
+    const debug = provider.getLastDebugInfo();
+    assert.equal(debug?.failureReason, 'stt_empty_audio');
+    assert.equal(debug?.streamBytesSent, 0);
+    assert.equal(debug?.streamNonEmptyChunkCount, 0);
+    assert.equal(debug?.streamClosedBeforeFirstChunk, true);
+    assert.equal(debug?.streamFirstChunkAt, null);
+    assert.equal(debug?.sttRequestSkippedBecauseEmpty, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test('FasterWhisperProvider rejects stt_empty_audio when all chunks are empty buffers', async () => {
+  let serverReceivedRequest = false;
+
+  const server = await startServer(async (_request, response) => {
+    serverReceivedRequest = true;
+    response.statusCode = 400;
+    response.end('should not have been called');
+  });
+
+  async function* createZeroByteStream(): AsyncIterable<Buffer> {
+    yield Buffer.alloc(0);
+    yield Buffer.alloc(0);
+  }
+
+  try {
+    const provider = new FasterWhisperProvider({ baseUrl: server.baseUrl });
+
+    await assert.rejects(
+      (async () => {
+        for await (const _ of provider.streamTranscribe(createZeroByteStream())) {
+          // drain
+        }
+      })(),
+      /stt_empty_audio:/,
+    );
+
+    assert.equal(serverReceivedRequest, false);
+    assert.equal(provider.getLastDebugInfo()?.sttRequestSkippedBecauseEmpty, true);
   } finally {
     await server.close();
   }
@@ -263,6 +344,8 @@ test('FasterWhisperProvider reports empty transcripts with a specific failure re
       transcriptLength: 0,
       failureReason: 'stt_empty_transcript',
     });
+    assert.equal(provider.getLastDebugInfo()?.streamBytesSent ?? null, null);
+    assert.equal(provider.getLastDebugInfo()?.streamNonEmptyChunkCount ?? null, null);
   } finally {
     await server.close();
   }

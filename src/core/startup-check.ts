@@ -4,8 +4,10 @@ import { resolve } from 'node:path';
 export const DEFAULT_ENV_PATH = resolve(process.cwd(), '.env');
 
 export interface StartupEnvironment {
-  ollamaModel: string;
-  ollamaBaseUrl: string;
+  ollamaModel?: string;
+  foregroundModel?: string;
+  backgroundModel?: string;
+  ollamaBaseUrl?: string;
   voiceMode: boolean;
   wakeWordUrl?: string;
   fasterWhisperUrl?: string;
@@ -29,19 +31,21 @@ export function loadStartupEnvironment(
   loadEnvFile(environment, envPath);
 
   const issues: string[] = [];
-  const ollamaModel = readRequiredEnv(
+  const foregroundModel = readOptionalEnv(
     environment,
-    ['OLLAMA_MODEL', 'SONNY_OLLAMA_MODEL'],
-    'OLLAMA_MODEL',
-    issues,
+    ['SONNY_FOREGROUND_MODEL', 'OLLAMA_MODEL', 'SONNY_OLLAMA_MODEL'],
   );
-  const ollamaBaseUrl = readRequiredUrl(
+  const backgroundModel = readOptionalEnv(
+    environment,
+    ['SONNY_BACKGROUND_MODEL', 'OLLAMA_MODEL', 'SONNY_OLLAMA_MODEL'],
+  );
+  const ollamaBaseUrl = readOptionalUrl(
     environment,
     ['OLLAMA_BASE_URL', 'SONNY_OLLAMA_BASE_URL'],
     'OLLAMA_BASE_URL',
     issues,
   );
-  const voiceMode = readRequiredBoolean(environment, 'SONNY_VOICE_MODE', issues);
+  const voiceMode = readOptionalBoolean(environment, 'SONNY_VOICE_MODE') ?? false;
 
   let wakeWordUrl: string | undefined;
   let fasterWhisperUrl: string | undefined;
@@ -73,7 +77,9 @@ export function loadStartupEnvironment(
   }
 
   return {
-    ollamaModel,
+    ollamaModel: foregroundModel,
+    foregroundModel,
+    backgroundModel,
     ollamaBaseUrl,
     voiceMode,
     wakeWordUrl,
@@ -147,6 +153,21 @@ function readRequiredEnv(
   issues.push(`${label} is required.`);
 
   return '';
+}
+
+function readOptionalEnv(
+  environment: NodeJS.ProcessEnv,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = environment[key]?.trim();
+
+    if (value !== undefined && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function readRequiredUrl(
@@ -226,6 +247,27 @@ function readRequiredBoolean(
   issues.push(`${key} must be set to 0, 1, false, or true.`);
 
   return false;
+}
+
+function readOptionalBoolean(
+  environment: NodeJS.ProcessEnv,
+  key: string,
+): boolean | undefined {
+  const rawValue = environment[key]?.trim().toLowerCase();
+
+  if (rawValue === undefined || rawValue.length === 0) {
+    return undefined;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(rawValue)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(rawValue)) {
+    return false;
+  }
+
+  return undefined;
 }
 
 function buildMessage(issues: string[]): string {

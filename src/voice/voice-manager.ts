@@ -3,9 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import { Gateway } from '../core/gateway.js';
 import { TimingTracker } from '../core/timing.js';
-import { ChatterboxProvider } from './providers/chatterbox.js';
-import { FasterWhisperProvider } from './providers/faster-whisper.js';
 import { PorcupineProvider } from './providers/porcupine.js';
+import {
+  createConfiguredPlaybackProvider,
+  createConfiguredSttProvider,
+  createConfiguredTtsProvider,
+} from './providers/provider-registry.js';
+import type { PlaybackProvider } from './providers/playback.js';
+import { SystemPlaybackProvider } from './providers/system-playback.js';
 import type { SttDebugInfo, SttOptions, SttProvider, SttResult } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type {
@@ -109,6 +114,7 @@ export interface VoiceManagerConfig {
   defaultTtsOptions?: TtsOptions;
   playbackQueue?: StreamingAudioQueue;
   speaker?: Speaker;
+  playbackProvider?: PlaybackProvider;
   responseProcessor?: ResponseProcessor;
   speechSegmentationStrategy?: 'conservative' | 'aggressive';
 }
@@ -125,6 +131,7 @@ export class VoiceManager {
   private readonly defaultTtsOptions: TtsOptions;
   private readonly playbackQueue: StreamingAudioQueue;
   private readonly speaker: Speaker | undefined;
+  private readonly playbackProvider: PlaybackProvider;
   private readonly responseProcessor: ResponseProcessor;
   private readonly speechSegmentationStrategy: 'conservative' | 'aggressive';
   private readonly listeners = new Set<VoiceManagerListener>();
@@ -151,6 +158,7 @@ export class VoiceManager {
     this.defaultTtsOptions = config.defaultTtsOptions ?? {};
     this.playbackQueue = config.playbackQueue ?? new StreamingAudioQueue();
     this.speaker = config.speaker;
+    this.playbackProvider = this.createPlaybackProvider(config, runtimeConfig);
     this.responseProcessor = config.responseProcessor ?? new ResponseProcessor();
     this.speechSegmentationStrategy =
       config.speechSegmentationStrategy ?? 'aggressive';
@@ -192,9 +200,7 @@ export class VoiceManager {
     }
 
     if (runtimeConfig !== undefined) {
-      return new FasterWhisperProvider({
-        baseUrl: runtimeConfig.voice.fasterWhisper.url,
-      });
+      return createConfiguredSttProvider(runtimeConfig);
     }
 
     throw new Error(
@@ -211,14 +217,29 @@ export class VoiceManager {
     }
 
     if (runtimeConfig !== undefined) {
-      return new ChatterboxProvider({
-        baseUrl: runtimeConfig.voice.chatterbox.url,
-      });
+      return createConfiguredTtsProvider(runtimeConfig);
     }
 
     throw new Error(
       'Voice manager requires either ttsProvider or runtimeConfig to initialize.',
     );
+  }
+
+  private createPlaybackProvider(
+    config: VoiceManagerConfig,
+    runtimeConfig: RuntimeConfig | undefined,
+  ): PlaybackProvider {
+    if (config.playbackProvider !== undefined) {
+      return config.playbackProvider;
+    }
+
+    if (runtimeConfig !== undefined) {
+      return createConfiguredPlaybackProvider(runtimeConfig, this.playbackQueue);
+    }
+
+    return new SystemPlaybackProvider({
+      playbackQueue: this.playbackQueue,
+    });
   }
 
   private createWakeWordProvider(
@@ -257,6 +278,18 @@ export class VoiceManager {
 
   public get isRunning(): boolean {
     return this.started;
+  }
+
+  public get sttProviderName(): string {
+    return this.sttProvider.name;
+  }
+
+  public get ttsProviderName(): string {
+    return this.ttsProvider.name;
+  }
+
+  public get playbackProviderName(): string {
+    return this.playbackProvider.name;
   }
 
   public get audioQueue(): StreamingAudioQueue {
@@ -621,14 +654,18 @@ export class VoiceManager {
     if (
       capture.audioStream !== undefined &&
       this.sttProvider.supportsStreaming &&
-      this.sttProvider.streamTranscribe !== undefined
+      (this.sttProvider.transcribeStream !== undefined ||
+        this.sttProvider.streamTranscribe !== undefined)
     ) {
       let latestResult: SttResult | undefined;
+      const transcribeStream =
+        this.sttProvider.transcribeStream ?? this.sttProvider.streamTranscribe;
 
-      for await (const result of this.sttProvider.streamTranscribe(
-        capture.audioStream,
-        options,
-      )) {
+      if (transcribeStream === undefined) {
+        throw new Error('Streaming STT was selected but no transcribeStream implementation is available.');
+      }
+
+      for await (const result of transcribeStream.call(this.sttProvider, capture.audioStream, options)) {
         latestResult = result;
         this.emit({
           type: 'transcription_partial',
@@ -857,32 +894,33 @@ export class VoiceManager {
 
     if (
       this.ttsProvider.supportsStreaming &&
-      this.ttsProvider.streamSynthesize !== undefined
+      this.playbackProvider.playStream !== undefined &&
+      (this.ttsProvider.synthesizeStream !== undefined ||
+        this.ttsProvider.streamSynthesize !== undefined)
     ) {
-      const sourceStream = this.ttsProvider.streamSynthesize(
-        sentence.taggedText,
-        options,
-      );
-      const collectedStream = this.createPrefetchedStream(sourceStream);
+      const synthesizeStream =
+        this.ttsProvider.synthesizeStream ?? this.ttsProvider.streamSynthesize;
 
-      this.playbackQueue.enqueueStream(collectedStream.stream, {
+      if (synthesizeStream === undefined) {
+        throw new Error('Streaming TTS was selected but no synthesizeStream implementation is available.');
+      }
+
+      const sourceStream = synthesizeStream.call(this.ttsProvider, sentence.taggedText, options);
+
+      return this.playbackProvider.playStream(sourceStream, {
         text: sentence.text,
         timingTracker: options.timingTracker,
         voice: options.voice,
       });
-
-      return collectedStream.completed;
     }
 
     const audio = await this.ttsProvider.synthesize(sentence.taggedText, options);
 
-    this.playbackQueue.enqueue(audio, {
+    return this.playbackProvider.play(audio, {
       text: sentence.text,
       timingTracker: options.timingTracker,
       voice: options.voice,
     });
-
-    return audio;
   }
 
   private resolveTtsOptions(
@@ -914,120 +952,6 @@ export class VoiceManager {
     return this.speechSegmentationStrategy === 'conservative'
       ? extractConservativeSpeechSegments(text)
       : extractAggressiveSpeechSegments(text);
-  }
-
-  private createPrefetchedStream(
-    source: AsyncIterable<Buffer>,
-  ): { stream: AsyncIterable<Buffer>; completed: Promise<Buffer> } {
-    const chunks: Buffer[] = [];
-    const bufferedChunks: Buffer[] = [];
-    const waiters: Array<() => void> = [];
-    let completed = false;
-    let failed: Error | undefined;
-    let resolveCompleted: ((audio: Buffer) => void) | undefined;
-    let rejectCompleted: ((error: Error) => void) | undefined;
-    const completedPromise = new Promise<Buffer>((resolve, reject) => {
-      resolveCompleted = resolve;
-      rejectCompleted = (error) => {
-        reject(error);
-      };
-    });
-
-    void this.prefetchStream(
-      source,
-      chunks,
-      bufferedChunks,
-      waiters,
-      () => {
-        completed = true;
-      },
-      (error) => {
-        failed = error;
-      },
-      (audio) => {
-        resolveCompleted?.(audio);
-      },
-      (error) => {
-        rejectCompleted?.(error);
-      },
-    );
-
-    return {
-      stream: this.readPrefetchedStream(
-        bufferedChunks,
-        waiters,
-        () => completed,
-        () => failed,
-      ),
-      completed: completedPromise,
-    };
-  }
-
-  private async prefetchStream(
-    source: AsyncIterable<Buffer>,
-    chunks: Buffer[],
-    bufferedChunks: Buffer[],
-    waiters: Array<() => void>,
-    markCompleted: () => void,
-    setFailed: (error: Error) => void,
-    resolveCompleted: (audio: Buffer) => void,
-    rejectCompleted: (error: Error) => void,
-  ): Promise<void> {
-    try {
-      for await (const chunk of source) {
-        chunks.push(chunk);
-        bufferedChunks.push(chunk);
-        this.flushPrefetchedWaiters(waiters);
-      }
-
-      markCompleted();
-      this.flushPrefetchedWaiters(waiters);
-      resolveCompleted(Buffer.concat(chunks));
-    } catch (error: unknown) {
-      const streamingError = this.toError(error, 'Streaming synthesis failed');
-
-      setFailed(streamingError);
-      this.flushPrefetchedWaiters(waiters);
-      rejectCompleted(streamingError);
-    }
-  }
-
-  private async *readPrefetchedStream(
-    bufferedChunks: Buffer[],
-    waiters: Array<() => void>,
-    isCompleted: () => boolean,
-    getFailed: () => Error | undefined,
-  ): AsyncIterable<Buffer> {
-    while (true) {
-      const failed = getFailed();
-
-      if (failed !== undefined) {
-        throw failed;
-      }
-
-      const chunk = bufferedChunks.shift();
-
-      if (chunk !== undefined) {
-        yield chunk;
-        continue;
-      }
-
-      if (isCompleted()) {
-        return;
-      }
-
-      await new Promise<void>((resolve) => {
-        waiters.push(resolve);
-      });
-    }
-  }
-
-  private flushPrefetchedWaiters(waiters: Array<() => void>): void {
-    while (waiters.length > 0) {
-      const waiter = waiters.shift();
-
-      waiter?.();
-    }
   }
 
   private handlePlaybackQueueEvent(event: StreamingAudioQueueEvent): void {
@@ -1214,9 +1138,9 @@ export class VoiceManager {
   }
 }
 
-const EARLY_SPEECH_MIN_CHARS = 32;
-const EARLY_SPEECH_MIN_WORDS = 5;
-const EARLY_SPEECH_FORCE_CHARS = 48;
+const EARLY_SPEECH_MIN_CHARS = 24;
+const EARLY_SPEECH_MIN_WORDS = 4;
+const EARLY_SPEECH_FORCE_CHARS = 36;
 
 export function extractConservativeSpeechSegments(
   text: string,

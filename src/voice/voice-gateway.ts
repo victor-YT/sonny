@@ -5,11 +5,12 @@ import { createInterface, type Interface as ReadLineInterface } from 'node:readl
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
+import { resolveRuntimeConfigFromEnvironment } from '../core/runtime-config-resolution.js';
 import type { Gateway } from '../core/gateway.js';
 import { StreamingAudioQueue } from './streaming-audio-queue.js';
 import { Microphone, type MicrophoneConfig } from './microphone.js';
-import { FasterWhisperProvider } from './providers/faster-whisper.js';
 import { PorcupineProvider } from './providers/porcupine.js';
+import { createConfiguredSttProvider } from './providers/provider-registry.js';
 import type { SttOptions, SttProvider, SttResult } from './providers/stt.js';
 import type { TtsOptions, TtsProvider } from './providers/tts.js';
 import type { WakeWordProvider } from './providers/wake-word.js';
@@ -27,6 +28,7 @@ const DEFAULT_VAD_SILENCE_SECONDS = 30;
 const PROJECT_ROOT = process.cwd();
 const WHISPER_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'whisper-server.py');
 const TTS_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'qwen3-tts-server.py');
+const VAD_SERVER_SCRIPT = resolve(PROJECT_ROOT, 'scripts', 'vad-server.py');
 
 export interface VoiceGatewayConfig {
   gateway: Gateway;
@@ -56,6 +58,7 @@ export interface VoiceEnvironmentConfig {
   audioDeviceIndex?: number;
   sttBaseUrl?: string;
   ttsBaseUrl?: string;
+  vadBaseUrl?: string;
   sttLanguage?: string;
   ttsVoice?: string;
   micSampleRateHertz?: number;
@@ -63,10 +66,20 @@ export interface VoiceEnvironmentConfig {
   micSilenceSeconds?: number;
   micMaxCaptureMs?: number;
   micRecordProgram?: string;
+  micDebugMode?: string;
+  micGainDb?: number;
   pythonCommand?: string;
   serviceStartupTimeoutMs?: number;
   vadSpeechThreshold?: number;
   vadMinSpeechChunks?: number;
+}
+
+export interface PlaybackBargeInEvent {
+  detectedAt: string;
+  rmsLevel: number;
+  speechChunks: number;
+  threshold: number;
+  minSpeechChunks: number;
 }
 
 interface ManagedProcessHandle {
@@ -112,6 +125,10 @@ export class VoiceGateway {
 
   private playbackVadMonitor: PlaybackVadMonitor | undefined;
   private playbackRestartTask: Promise<void> | undefined;
+  private playbackBargeInHandler:
+    | ((event: PlaybackBargeInEvent) => Promise<boolean>)
+    | undefined;
+  private playbackBargeInEnabledResolver: (() => boolean) | undefined;
   private started = false;
 
   public constructor(config: VoiceGatewayConfig) {
@@ -208,6 +225,18 @@ export class VoiceGateway {
     await this.stopManagedServices();
   }
 
+  public setPlaybackBargeInHandler(
+    handler: ((event: PlaybackBargeInEvent) => Promise<boolean>) | undefined,
+  ): void {
+    this.playbackBargeInHandler = handler;
+  }
+
+  public setPlaybackBargeInEnabledResolver(
+    resolver: (() => boolean) | undefined,
+  ): void {
+    this.playbackBargeInEnabledResolver = resolver;
+  }
+
   private resolveRuntimeConfig(
     config: VoiceGatewayConfig,
   ): RuntimeConfig | undefined {
@@ -268,15 +297,15 @@ export class VoiceGateway {
     const baseProvider = config.sttProvider
       ?? (runtimeConfig === undefined
         ? undefined
-        : new FasterWhisperProvider({
-            baseUrl: runtimeConfig.voice.fasterWhisper.url,
-          }));
+        : createConfiguredSttProvider(runtimeConfig));
 
     if (baseProvider === undefined) {
       return undefined;
     }
 
-    const instrumentedStreamTranscribe = baseProvider.streamTranscribe === undefined
+    const providerStreamTranscribe =
+      baseProvider.transcribeStream ?? baseProvider.streamTranscribe;
+    const instrumentedStreamTranscribe = providerStreamTranscribe === undefined
       ? undefined
       : async function* (
         audioStream: AsyncIterable<Buffer>,
@@ -285,7 +314,7 @@ export class VoiceGateway {
         options.timingTracker?.start('stt_transcription');
 
         try {
-          for await (const result of baseProvider.streamTranscribe!(audioStream, options)) {
+          for await (const result of providerStreamTranscribe.call(baseProvider, audioStream, options)) {
             yield result;
           }
         } finally {
@@ -307,6 +336,7 @@ export class VoiceGateway {
         }
       },
       streamTranscribe: instrumentedStreamTranscribe,
+      transcribeStream: instrumentedStreamTranscribe,
     };
   }
 
@@ -334,6 +364,17 @@ export class VoiceGateway {
       )}/health`,
       environment: toTtsEnvironment(
         this.environmentConfig.ttsBaseUrl ?? 'http://127.0.0.1:8001',
+      ),
+    });
+
+    await this.startHttpService({
+      name: 'vad',
+      scriptPath: VAD_SERVER_SCRIPT,
+      healthUrl: `${normalizeBaseUrl(
+        this.environmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003',
+      )}/health`,
+      environment: toVadEnvironment(
+        this.environmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003',
       ),
     });
   }
@@ -394,6 +435,10 @@ export class VoiceGateway {
       return;
     }
 
+    if (!this.isPlaybackBargeInEnabled()) {
+      return;
+    }
+
     const monitor = new PlaybackVadMonitor({
       sampleRateHertz: this.microphoneSettings.micSampleRateHertz,
       channels: this.microphoneSettings.micChannels,
@@ -405,8 +450,8 @@ export class VoiceGateway {
     this.playbackVadMonitor = monitor;
 
     try {
-      await monitor.start(async () => {
-        await this.handlePlaybackInterruption();
+      await monitor.start(async (event) => {
+        await this.handlePlaybackInterruption(event);
       });
     } catch (error: unknown) {
       this.playbackVadMonitor = undefined;
@@ -426,15 +471,18 @@ export class VoiceGateway {
     }
   }
 
-  private async handlePlaybackInterruption(): Promise<void> {
+  private async handlePlaybackInterruption(
+    event: PlaybackBargeInEvent,
+  ): Promise<void> {
     if (
       this.playbackRestartTask !== undefined ||
-      this.manager.currentState !== 'playing'
+      this.manager.currentState !== 'playing' ||
+      !this.isPlaybackBargeInEnabled()
     ) {
       return;
     }
 
-    const task = this.restartVoiceInteraction();
+    const task = this.restartVoiceInteraction(event);
     this.playbackRestartTask = task;
 
     try {
@@ -444,11 +492,24 @@ export class VoiceGateway {
     }
   }
 
-  private async restartVoiceInteraction(): Promise<void> {
+  private async restartVoiceInteraction(event: PlaybackBargeInEvent): Promise<void> {
     await this.stopPlaybackVadMonitor();
+
+    if (this.playbackBargeInHandler !== undefined) {
+      const handled = await this.playbackBargeInHandler(event);
+
+      if (handled) {
+        return;
+      }
+    }
+
     await this.manager.interruptCurrentInteraction();
     const capture = await this.microphone.capture();
     await this.manager.processCapture(capture);
+  }
+
+  private isPlaybackBargeInEnabled(): boolean {
+    return this.playbackBargeInEnabledResolver?.() ?? true;
   }
 }
 
@@ -456,7 +517,7 @@ export function createVoiceGatewayFromEnvironment(
   gateway: Gateway,
   environment: NodeJS.ProcessEnv = process.env,
 ): VoiceGateway {
-  const runtimeConfig = loadConfig();
+  const runtimeConfig = resolveRuntimeConfigFromEnvironment(loadConfig(), environment);
   const config = readVoiceEnvironmentConfig(environment);
   const resolvedWakeWords = config.wakeWords?.length
     ? config.wakeWords
@@ -510,6 +571,9 @@ export function createVoiceGatewayFromEnvironment(
       silenceSeconds: config.micSilenceSeconds,
       maxCaptureMs: config.micMaxCaptureMs,
       recordProgram: config.micRecordProgram,
+      debugMode: config.micDebugMode,
+      vadUrl: config.vadBaseUrl,
+      gainDb: config.micGainDb,
     },
     defaultSttOptions: {
       language: config.sttLanguage,
@@ -552,6 +616,9 @@ export function readVoiceEnvironmentConfig(
     ttsBaseUrl:
       environment.CHATTERBOX_URL ??
       environment.SONNY_TTS_BASE_URL,
+    vadBaseUrl:
+      environment.VAD_URL ??
+      environment.SONNY_VAD_BASE_URL,
     sttLanguage: environment.SONNY_STT_LANGUAGE,
     ttsVoice: environment.SONNY_TTS_VOICE,
     micSampleRateHertz: parseOptionalInteger(environment.SONNY_MIC_SAMPLE_RATE_HERTZ),
@@ -559,6 +626,8 @@ export function readVoiceEnvironmentConfig(
     micSilenceSeconds: parseOptionalNumber(environment.SONNY_MIC_SILENCE_SECONDS),
     micMaxCaptureMs: parseOptionalInteger(environment.SONNY_MIC_MAX_CAPTURE_MS),
     micRecordProgram: environment.SONNY_MIC_RECORD_PROGRAM,
+    micDebugMode: environment.SONNY_MIC_DEBUG_MODE,
+    micGainDb: parseOptionalNumber(environment.SONNY_MIC_GAIN_DB),
     pythonCommand: environment.SONNY_PYTHON_COMMAND,
     serviceStartupTimeoutMs: parseOptionalInteger(environment.SONNY_SERVICE_STARTUP_TIMEOUT_MS),
     vadSpeechThreshold: parseOptionalNumber(environment.SONNY_VAD_SPEECH_THRESHOLD),
@@ -618,7 +687,7 @@ class PlaybackVadMonitor {
   private source: NodeJS.ReadableStream | undefined;
   private speechChunks = 0;
   private started = false;
-  private onSpeech: (() => Promise<void>) | undefined;
+  private onSpeech: ((event: PlaybackBargeInEvent) => Promise<void>) | undefined;
 
   public constructor(config: {
     sampleRateHertz: number;
@@ -634,7 +703,9 @@ class PlaybackVadMonitor {
     this.minSpeechChunks = config.minSpeechChunks;
   }
 
-  public async start(onSpeech: () => Promise<void>): Promise<void> {
+  public async start(
+    onSpeech: (event: PlaybackBargeInEvent) => Promise<void>,
+  ): Promise<void> {
     if (this.started) {
       return;
     }
@@ -699,15 +770,25 @@ class PlaybackVadMonitor {
       return;
     }
 
-    this.speechChunks = 0;
     const callback = this.onSpeech;
+    const speechChunks = this.speechChunks;
+
+    this.speechChunks = 0;
 
     if (callback === undefined) {
       return;
     }
 
+    const event: PlaybackBargeInEvent = {
+      detectedAt: new Date().toISOString(),
+      rmsLevel: Number(rms.toFixed(4)),
+      speechChunks,
+      threshold: this.speechThreshold,
+      minSpeechChunks: this.minSpeechChunks,
+    };
+
     await this.stop();
-    await callback();
+    await callback(event);
   }
 
   private async createRecorder(): Promise<RecorderRuntime> {
@@ -863,6 +944,15 @@ function toTtsEnvironment(baseUrl: string): Record<string, string> {
   return {
     QWEN3_TTS_HOST: parsed.hostname,
     QWEN3_TTS_PORT: parsed.port.length > 0 ? parsed.port : '8001',
+  };
+}
+
+function toVadEnvironment(baseUrl: string): Record<string, string> {
+  const parsed = new URL(baseUrl);
+
+  return {
+    VAD_HOST: parsed.hostname,
+    VAD_PORT: parsed.port.length > 0 ? parsed.port : '8003',
   };
 }
 

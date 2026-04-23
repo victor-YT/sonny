@@ -109,26 +109,156 @@ export class FasterWhisperProvider implements SttProvider {
     };
   }
 
-  public async *streamTranscribe(
+  public async *transcribeStream(
     audioStream: AsyncIterable<Buffer>,
     options: SttOptions = {},
   ): AsyncIterable<SttResult> {
     const requestUrl = `${this.baseUrl}${this.transcribePath}?stream=true`;
-    const response = await this.fetchWithTimeout(
-      requestUrl,
-      {
-        method: 'POST',
-        headers: this.buildHeaders(options),
-        body: this.toReadableStream(audioStream),
-        duplex: 'half',
-      },
+    const iterator = audioStream[Symbol.asyncIterator]();
+    const liveMicDebug = options.streamingDebug?.source === 'live-mic'
+      ? options.streamingDebug
+      : undefined;
+    const shouldLogEnqueue = liveMicDebug !== undefined || this.shouldLogDiagnostics();
+
+    const firstChunk = await this.awaitFirstNonEmptyChunk(iterator);
+
+    if (firstChunk === null) {
+      if (liveMicDebug !== undefined) {
+        liveMicDebug.sttRequestSkippedBecauseEmpty = true;
+        this.logStreamingFetchSkipped(requestUrl, liveMicDebug, 'audio stream closed before any non-empty chunk was produced');
+      }
+
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: null,
+        contentType: null,
+        rawBodyPreview: null,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_empty_audio',
+        streamBytesSent: 0,
+        streamNonEmptyChunkCount: 0,
+        streamFirstChunkAt: null,
+        streamClosedBeforeFirstChunk: true,
+        sttRequestSkippedBecauseEmpty: true,
+      };
+
+      if (this.shouldLogDiagnostics()) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[stt] audio stream closed before any non-empty chunk was produced; skipping ${requestUrl}`,
+        );
+      }
+
+      throw new Error(
+        'stt_empty_audio: audio stream closed before any non-empty chunk was produced',
+      );
+    }
+
+    const metrics: StreamSendMetrics = {
+      totalBytesSent: 0,
+      nonEmptyChunkCount: 0,
+      firstChunkAt: null,
+      requestStreamClosed: false,
+      requestBodyFinishedNormally: false,
+      requestBodyCanceled: false,
+    };
+
+    const body = this.toReadableStreamFromPrefetched(
+      firstChunk,
+      iterator,
+      metrics,
+      shouldLogEnqueue,
     );
+
+    if (metrics.nonEmptyChunkCount === 0) {
+      if (liveMicDebug !== undefined) {
+        liveMicDebug.sttRequestSkippedBecauseEmpty = true;
+        liveMicDebug.streamBytesSent = metrics.totalBytesSent;
+        liveMicDebug.streamNonEmptyChunkCount = metrics.nonEmptyChunkCount;
+        liveMicDebug.endedBeforeFirstChunk = true;
+        this.logStreamingFetchSkipped(
+          requestUrl,
+          liveMicDebug,
+          'request body stream did not enqueue the prefetched first chunk',
+        );
+      }
+
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: null,
+        contentType: null,
+        rawBodyPreview: null,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_empty_audio',
+        ...this.buildStreamDiagnostics(metrics),
+      };
+
+      throw new Error(
+        'stt_empty_audio: request body stream did not enqueue the prefetched first chunk',
+      );
+    }
+
+    if (liveMicDebug !== undefined) {
+      liveMicDebug.streamBytesSent = metrics.totalBytesSent;
+      liveMicDebug.streamNonEmptyChunkCount = metrics.nonEmptyChunkCount;
+      liveMicDebug.firstNonEmptyChunkReceived = true;
+      liveMicDebug.endedBeforeFirstChunk = false;
+      liveMicDebug.sttRequestSkippedBecauseEmpty = false;
+      this.logStreamingFetchStarted(requestUrl, liveMicDebug);
+    } else if (this.shouldLogDiagnostics()) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[stt] streaming request to ${requestUrl} starting (${metrics.totalBytesSent} bytes enqueued across ${metrics.nonEmptyChunkCount} chunk(s))`,
+      );
+    }
+
+    const fetchStartedAt = Date.now();
+    let response: Response;
+
+    try {
+      response = await this.fetchWithTimeout(
+        requestUrl,
+        {
+          method: 'POST',
+          headers: this.buildHeaders(options),
+          body,
+          duplex: 'half',
+        },
+      );
+    } catch (error: unknown) {
+      this.lastDebugInfo = {
+        requestUrl,
+        httpStatus: null,
+        contentType: null,
+        rawBodyPreview: null,
+        responseKeys: [],
+        transcript: null,
+        transcriptLength: null,
+        failureReason: 'stt_http_error',
+        streamBytesSent: metrics.totalBytesSent,
+        streamNonEmptyChunkCount: metrics.nonEmptyChunkCount,
+        streamFirstChunkAt: metrics.firstChunkAt?.toISOString() ?? null,
+        streamClosedBeforeFirstChunk: false,
+        sttRequestSkippedBecauseEmpty: false,
+      };
+      throw error;
+    }
+
+    this.logStreamingResponseHeaders(requestUrl, response, Date.now() - fetchStartedAt, metrics);
+
+    const streamDiagnostics = this.buildStreamDiagnostics(metrics);
 
     if (!response.ok) {
       const debugInfo = await this.buildHttpErrorDebugInfo(response, requestUrl);
+
+      this.lastDebugInfo = { ...debugInfo, ...streamDiagnostics };
+
       const detail = debugInfo.rawBodyPreview === null ? '' : `: ${debugInfo.rawBodyPreview}`;
 
-      this.lastDebugInfo = debugInfo;
       throw new Error(
         `stt_http_error: faster-whisper request failed with status ${response.status} ${response.statusText}${detail}`,
       );
@@ -144,6 +274,7 @@ export class FasterWhisperProvider implements SttProvider {
         transcript: null,
         transcriptLength: null,
         failureReason: 'stt_invalid_json',
+        ...streamDiagnostics,
       };
       throw new Error('stt_invalid_json: faster-whisper streaming response body is unavailable');
     }
@@ -171,6 +302,8 @@ export class FasterWhisperProvider implements SttProvider {
         const parsed = this.parseJsonText(line, requestUrl, response);
         const result = this.toSttResult(parsed);
 
+        this.applyStreamDiagnostics(metrics);
+
         yield result;
       }
     }
@@ -180,8 +313,27 @@ export class FasterWhisperProvider implements SttProvider {
     if (trailing.length > 0) {
       const parsed = this.parseJsonText(trailing, requestUrl, response);
 
+      this.applyStreamDiagnostics(metrics);
+
       yield this.toSttResult(parsed);
     }
+
+    if (this.shouldLogDiagnostics()) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[stt] streaming request to ${requestUrl} complete: ` +
+          `${metrics.totalBytesSent} bytes across ${metrics.nonEmptyChunkCount} chunk(s)`,
+      );
+    }
+
+    this.applyStreamDiagnostics(metrics);
+  }
+
+  public streamTranscribe(
+    audioStream: AsyncIterable<Buffer>,
+    options: SttOptions = {},
+  ): AsyncIterable<SttResult> {
+    return this.transcribeStream(audioStream, options);
   }
 
   private normalizeBaseUrl(baseUrl: string): string {
@@ -223,8 +375,9 @@ export class FasterWhisperProvider implements SttProvider {
   }
 
   private buildHeaders(options: SttOptions = {}): Record<string, string> {
+    const contentType = this.resolveContentType(options);
     const headers: Record<string, string> = {
-      'content-type': this.mimeType,
+      'content-type': contentType,
       'x-audio-filename': this.filename,
       ...this.headers,
     };
@@ -250,6 +403,18 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     return headers;
+  }
+
+  private resolveContentType(options: SttOptions): string {
+    if (options.encoding === 'pcm_s16le') {
+      return 'application/octet-stream';
+    }
+
+    if (options.encoding === 'wav') {
+      return 'audio/wav';
+    }
+
+    return this.mimeType;
   }
 
   private async buildHttpErrorDebugInfo(
@@ -412,28 +577,208 @@ export class FasterWhisperProvider implements SttProvider {
     };
   }
 
-  private toReadableStream(
-    audioStream: AsyncIterable<Buffer>,
-  ): ReadableStream<Uint8Array> {
-    const iterator = audioStream[Symbol.asyncIterator]();
+  private async awaitFirstNonEmptyChunk(
+    iterator: AsyncIterator<Buffer>,
+  ): Promise<Buffer | null> {
+    while (true) {
+      const next = await iterator.next();
 
+      if (next.done) {
+        return null;
+      }
+
+      if (next.value.byteLength > 0) {
+        return next.value;
+      }
+    }
+  }
+
+  private toReadableStreamFromPrefetched(
+    firstChunk: Buffer,
+    iterator: AsyncIterator<Buffer>,
+    metrics: StreamSendMetrics,
+    shouldLogEnqueue: boolean,
+  ): ReadableStream<Uint8Array> {
     return new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.enqueueRequestBodyChunk(controller, firstChunk, metrics, 1, shouldLogEnqueue);
+      },
       pull: async (controller) => {
         const nextChunk = await iterator.next();
 
         if (nextChunk.done) {
+          metrics.requestStreamClosed = true;
+          metrics.requestBodyFinishedNormally = true;
           controller.close();
           return;
         }
 
-        controller.enqueue(new Uint8Array(nextChunk.value));
+        const value = nextChunk.value;
+
+        if (value.byteLength === 0) {
+          return;
+        }
+
+        this.enqueueRequestBodyChunk(
+          controller,
+          value,
+          metrics,
+          metrics.nonEmptyChunkCount + 1,
+          shouldLogEnqueue,
+        );
       },
-      cancel: async () => {
+      cancel: async (reason) => {
+        metrics.requestStreamClosed = true;
+        metrics.requestBodyCanceled = true;
+        this.logRequestBodyCanceled(metrics, reason);
         if (iterator.return !== undefined) {
           await iterator.return();
         }
       },
     });
+  }
+
+  private enqueueRequestBodyChunk(
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    chunk: Buffer,
+    metrics: StreamSendMetrics,
+    chunkIndex: number,
+    shouldLogEnqueue: boolean,
+  ): void {
+    if (chunk.byteLength === 0) {
+      return;
+    }
+
+    controller.enqueue(new Uint8Array(chunk));
+    metrics.totalBytesSent += chunk.byteLength;
+    metrics.nonEmptyChunkCount += 1;
+
+    if (metrics.firstChunkAt === null) {
+      metrics.firstChunkAt = new Date();
+    }
+
+    if (shouldLogEnqueue) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '[stt] enqueue chunk',
+        JSON.stringify({
+          byteLength: chunk.byteLength,
+          chunkIndex,
+          totalEnqueuedBytes: metrics.totalBytesSent,
+          totalEnqueuedChunks: metrics.nonEmptyChunkCount,
+          requestStreamClosed: metrics.requestStreamClosed,
+        }),
+      );
+    }
+  }
+
+  private buildStreamDiagnostics(metrics: StreamSendMetrics): {
+    streamBytesSent: number;
+    streamNonEmptyChunkCount: number;
+    streamFirstChunkAt: string | null;
+    streamClosedBeforeFirstChunk: boolean;
+    sttRequestSkippedBecauseEmpty: boolean;
+  } {
+    return {
+      streamBytesSent: metrics.totalBytesSent,
+      streamNonEmptyChunkCount: metrics.nonEmptyChunkCount,
+      streamFirstChunkAt: metrics.firstChunkAt?.toISOString() ?? null,
+      streamClosedBeforeFirstChunk: metrics.nonEmptyChunkCount === 0,
+      sttRequestSkippedBecauseEmpty: false,
+    };
+  }
+
+  private applyStreamDiagnostics(metrics: StreamSendMetrics): void {
+    if (this.lastDebugInfo === null) {
+      return;
+    }
+
+    const streamDiagnostics = this.buildStreamDiagnostics(metrics);
+
+    this.lastDebugInfo = {
+      ...this.lastDebugInfo,
+      ...streamDiagnostics,
+    };
+  }
+
+  private shouldLogDiagnostics(): boolean {
+    return process.env.SONNY_STT_DEBUG === '1';
+  }
+
+  private logRequestBodyCanceled(
+    metrics: StreamSendMetrics,
+    reason: unknown,
+  ): void {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[stt] request body canceled',
+      JSON.stringify({
+        reason: stringifyUnknown(reason),
+        totalEnqueuedBytes: metrics.totalBytesSent,
+        totalEnqueuedChunks: metrics.nonEmptyChunkCount,
+        requestStreamClosed: metrics.requestStreamClosed,
+      }),
+    );
+  }
+
+  private logStreamingResponseHeaders(
+    requestUrl: string,
+    response: Response,
+    elapsedMs: number,
+    metrics: StreamSendMetrics,
+  ): void {
+    // eslint-disable-next-line no-console
+    console.log(
+      '[stt] response headers received',
+      JSON.stringify({
+        requestUrl,
+        responseStatus: response.status,
+        elapsedMs,
+        totalEnqueuedBytes: metrics.totalBytesSent,
+        totalEnqueuedChunks: metrics.nonEmptyChunkCount,
+        requestBodyFinished: metrics.requestBodyFinishedNormally,
+        requestStreamClosed: metrics.requestStreamClosed,
+      }),
+    );
+  }
+
+  private logStreamingFetchStarted(
+    requestUrl: string,
+    debug: NonNullable<SttOptions['streamingDebug']>,
+  ): void {
+    // eslint-disable-next-line no-console
+    console.log(
+      '[stt] streaming fetch started',
+      JSON.stringify({
+        requestUrl,
+        streamBytesSent: debug.streamBytesSent,
+        streamNonEmptyChunkCount: debug.streamNonEmptyChunkCount,
+        captureEndedBy: debug.captureEndedBy,
+        firstNonEmptyChunkReceived: debug.firstNonEmptyChunkReceived,
+        endedBeforeFirstChunk: debug.endedBeforeFirstChunk,
+      }),
+    );
+  }
+
+  private logStreamingFetchSkipped(
+    requestUrl: string,
+    debug: NonNullable<SttOptions['streamingDebug']>,
+    reason: string,
+  ): void {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[stt] streaming fetch skipped',
+      JSON.stringify({
+        requestUrl,
+        reason,
+        streamBytesSent: debug.streamBytesSent,
+        streamNonEmptyChunkCount: debug.streamNonEmptyChunkCount,
+        captureEndedBy: debug.captureEndedBy,
+        firstNonEmptyChunkReceived: debug.firstNonEmptyChunkReceived,
+        endedBeforeFirstChunk: debug.endedBeforeFirstChunk,
+        sttRequestSkippedBecauseEmpty: debug.sttRequestSkippedBecauseEmpty,
+      }),
+    );
   }
 
   private parseSegments(payload: unknown): SttSegment[] | undefined {
@@ -548,4 +893,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 interface RequestInitWithDuplex extends RequestInit {
   duplex?: 'half';
+}
+
+interface StreamSendMetrics {
+  totalBytesSent: number;
+  nonEmptyChunkCount: number;
+  firstChunkAt: Date | null;
+  requestStreamClosed: boolean;
+  requestBodyFinishedNormally: boolean;
+  requestBodyCanceled: boolean;
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value === undefined) {
+    return 'undefined';
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }

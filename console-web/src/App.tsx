@@ -62,6 +62,8 @@ import {
   type RecorderDebugInfo,
   type RuntimeLogEntry,
   type RuntimeSnapshot,
+  type TurnTimelineDebugInfo,
+  type TurnTimelineStage,
   type VoiceSettingsPayload,
 } from '@/lib/control-center'
 
@@ -93,6 +95,7 @@ interface StateEventPayload {
 const DEBUG_REFRESH_TYPES = new Set([
   'manual_listen_started',
   'manual_listen_stopped',
+  'manual_capture_stop_requested',
   'recording_started',
   'silence_detected',
   'recording_backend_detected',
@@ -105,11 +108,13 @@ const DEBUG_REFRESH_TYPES = new Set([
   'recording_start_failed',
   'recording_stopped',
   'recording_saved',
+  'recording_input_silent',
   'recording_format_warning',
   'stt_started',
   'stt_first_chunk',
   'stt_finished',
   'stt_failed',
+  'stt_empty_transcript_ignored',
   'gateway_started',
   'gateway_first_token',
   'gateway_first_sentence_ready',
@@ -126,6 +131,9 @@ const DEBUG_REFRESH_TYPES = new Set([
   'playback_started',
   'playback_finished',
   'playback_interrupted',
+  'barge_in_detected',
+  'playback_interrupted_by_user',
+  'barge_in_listening_restarted',
   'voice_pipeline_completed',
   'voice_pipeline_failed',
   'runtime_reset',
@@ -296,8 +304,15 @@ function App() {
   }, [])
 
   useEffect(() => {
-    setNotice(describeNotice(controlState.snapshot, connection))
-  }, [controlState.snapshot, connection])
+    setNotice(
+      describeNotice(
+        controlState.snapshot,
+        connection,
+        controlState.recorder,
+        controlState.lastAudio,
+      ),
+    )
+  }, [controlState.snapshot, connection, controlState.recorder, controlState.lastAudio])
 
   const runtimeClass = useMemo(() => {
     return controlState.snapshot ? normalizeStateClass(controlState.snapshot) : 'idle'
@@ -950,6 +965,14 @@ function App() {
                       </div>
                       <Card>
                         <CardHeader>
+                          <CardTitle className="text-base">Voice Turn Timeline</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <VoiceTurnTimeline pipeline={controlState.pipeline} />
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardHeader>
                           <CardTitle className="text-base">Flow</CardTitle>
                         </CardHeader>
                         <CardContent>
@@ -1237,6 +1260,216 @@ function LatencyGrid({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
       ))}
     </div>
   )
+}
+
+function VoiceTurnTimeline({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
+  if (pipeline === null) {
+    return (
+      <EmptyState message="No voice turn timeline yet. Start a live voice turn to watch the runtime progress through listening, STT, LLM, TTS, playback, and idle." />
+    )
+  }
+
+  const timeline = pipeline.turnTimeline
+  const stageCount = timeline.stages.length
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <TimelineMetricCard label="Current State" value={formatState(timeline.currentState)} />
+        <TimelineMetricCard
+          label="Active Stage"
+          value={timeline.activeStageLabel ?? 'Waiting'}
+        />
+        <TimelineMetricCard
+          label="Total Turn"
+          value={formatDuration(timeline.durations.totalTurnDurationMs)}
+        />
+        <TimelineMetricCard
+          label="Barge-In"
+          value={timeline.timestamps.bargeInDetectedAt ? 'Detected' : 'None'}
+        />
+      </div>
+
+      <ScrollArea className="w-full rounded-xl border bg-background/50">
+        <div className="flex min-w-max items-start gap-0 p-4">
+          {timeline.stages.map((stage, index) => (
+            <div key={stage.key} className="flex items-start">
+              <TimelineStageCard
+                stage={stage}
+                isActive={timeline.activeStage === stage.key}
+              />
+              {index < stageCount - 1 ? (
+                <div className="flex h-[150px] items-center px-2">
+                  <div className="h-px w-8 bg-border" />
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <TimelineMetricCard
+          label="Listening"
+          value={formatDuration(timeline.durations.listeningDurationMs)}
+        />
+        <TimelineMetricCard
+          label="Silence to STT"
+          value={formatDuration(timeline.durations.silenceToSttMs)}
+        />
+        <TimelineMetricCard
+          label="STT"
+          value={formatDuration(timeline.durations.sttDurationMs)}
+        />
+        <TimelineMetricCard
+          label="LLM"
+          value={formatDuration(timeline.durations.llmDurationMs)}
+        />
+        <TimelineMetricCard
+          label="TTS"
+          value={formatDuration(timeline.durations.ttsDurationMs)}
+        />
+        <TimelineMetricCard
+          label="Playback"
+          value={formatDuration(timeline.durations.playbackDurationMs)}
+        />
+        <TimelineMetricCard
+          label="Listening Started"
+          value={formatTimelineTime(timeline.timestamps.listeningStartedAt)}
+        />
+        <TimelineMetricCard
+          label="Last Completed"
+          value={formatTimelineStageKey(timeline.lastCompletedStage)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function TimelineMetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background/60 px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium">{value}</p>
+    </div>
+  )
+}
+
+function TimelineStageCard({
+  stage,
+  isActive,
+}: {
+  stage: TurnTimelineStage
+  isActive: boolean
+}) {
+  return (
+    <div
+      className={cn(
+        'w-[190px] shrink-0 rounded-xl border bg-background/80 p-3 text-left transition-colors',
+        stage.status === 'pending' && 'border-border/70 opacity-65',
+        stage.status === 'completed' && 'border-border bg-muted/20',
+        stage.status === 'active' && 'border-foreground/50 bg-background shadow-sm ring-2 ring-ring/20',
+        stage.status === 'interrupted' && 'border-amber-500/50 bg-amber-500/5',
+        stage.status === 'failed' && 'border-destructive/50 bg-destructive/5',
+        isActive && 'ring-2 ring-ring/25',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">{stage.label}</p>
+          <p className="text-xs text-muted-foreground">
+            {formatTimelineTime(stage.startAt)}
+          </p>
+        </div>
+        <Badge className={timelineBadgeClassName(stage.status)} variant={timelineBadgeVariant(stage.status)}>
+          {formatTimelineStatus(stage.status)}
+        </Badge>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <p className="text-2xl font-semibold">{formatTimelineDuration(stage)}</p>
+        <div className="space-y-1 text-xs text-muted-foreground">
+          <p>Start: {formatTimelineTime(stage.startAt)}</p>
+          <p>End: {formatTimelineTime(stage.endAt)}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function timelineBadgeVariant(
+  status: TurnTimelineStage['status'],
+): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (status === 'failed') {
+    return 'destructive'
+  }
+
+  if (status === 'active') {
+    return 'secondary'
+  }
+
+  return 'outline'
+}
+
+function timelineBadgeClassName(status: TurnTimelineStage['status']): string {
+  if (status === 'interrupted') {
+    return 'border-amber-500/60 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+  }
+
+  if (status === 'pending') {
+    return 'text-muted-foreground'
+  }
+
+  return ''
+}
+
+function formatTimelineStatus(status: TurnTimelineStage['status']): string {
+  switch (status) {
+    case 'active':
+      return 'Active'
+    case 'completed':
+      return 'Completed'
+    case 'interrupted':
+      return 'Interrupted'
+    case 'failed':
+      return 'Failed'
+    case 'pending':
+    default:
+      return 'Pending'
+  }
+}
+
+function formatTimelineTime(value: string | null): string {
+  if (value === null) {
+    return 'Pending'
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function formatTimelineDuration(stage: TurnTimelineStage): string {
+  if (stage.durationMs === null) {
+    return stage.startAt === null && stage.endAt === null ? 'Pending' : 'Event'
+  }
+
+  return formatDuration(stage.durationMs)
+}
+
+function formatTimelineStageKey(
+  value: TurnTimelineDebugInfo['lastCompletedStage'],
+): string {
+  if (value === null) {
+    return 'None'
+  }
+
+  return value
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ')
 }
 
 function runtimeBadgeVariant(

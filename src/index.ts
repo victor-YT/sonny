@@ -22,6 +22,7 @@ import {
   loadStartupEnvironment,
   type StartupEnvironment,
 } from './core/startup-check.js';
+import { resolveRuntimeConfigFromEnvironment } from './core/runtime-config-resolution.js';
 import { MonitorRegistry } from './skills/monitor-registry.js';
 import { WebMonitor } from './skills/web-monitor.js';
 import {
@@ -60,13 +61,7 @@ function createGateway(
   proactiveAgent: ProactiveAgent,
 ): Gateway {
   return new Gateway({
-    runtimeConfig: {
-      ...runtimeConfig,
-      ollama: {
-        baseUrl: startupEnvironment.ollamaBaseUrl,
-        model: startupEnvironment.ollamaModel,
-      },
-    },
+    runtimeConfig,
     sessionConfig: {
       systemPrompt: SYSTEM_PROMPT,
     },
@@ -230,7 +225,7 @@ async function runVoice(
 
 async function main(): Promise<void> {
   const startupEnvironment = loadStartupEnvironment(process.env);
-  const runtimeConfig = loadConfig();
+  const runtimeConfig = resolveRuntimeConfigFromEnvironment(loadConfig(), process.env);
   const proactiveAgent = new ProactiveAgent();
   const gateway = createGateway(
     runtimeConfig,

@@ -84,6 +84,8 @@ async function main(): Promise<void> {
     printSection('Services', formatServices(snapshot));
     printSection('Recorder Debug', formatRecorder(recorder));
     printSection('Last Audio', formatLastAudio(lastAudio));
+    printSection('Providers', formatProviders(pipeline));
+    printSection('Barge-In', formatBargeIn(pipeline));
     printSection('Pipeline', formatPipeline(pipeline, settled.timedOut));
     printSection('Latency', formatLatency(pipeline));
     printSection(
@@ -149,6 +151,14 @@ function formatRecorder(recorder: RecorderRuntimeDebugInfo): string[] {
     `Backend: ${recorder.backend}`,
     `Backend Path: ${recorder.backendPath ?? 'not found'}`,
     `Available: ${String(recorder.backendAvailable)}`,
+    `Command: ${recorder.command ?? 'unknown'}`,
+    `Args: ${recorder.args.length > 0 ? recorder.args.join(' ') : 'none'}`,
+    `Input Source: ${recorder.inputSource ?? 'unknown'}`,
+    `Requested Sample Rate: ${formatMaybe(recorder.requestedSampleRateHertz, 'Hz')}`,
+    `Requested Channels: ${formatMaybe(recorder.requestedChannels)}`,
+    `Output Format: ${recorder.outputFormat ?? 'unknown'}`,
+    `Output Transport: ${recorder.outputTransport ?? 'unknown'}`,
+    `Debug Mode: ${recorder.debugMode ?? 'off'}`,
     `Input Device: ${recorder.device ?? 'default'}`,
     `Default Device: ${String(recorder.usingDefaultDevice)}`,
     `Spawn Started: ${String(recorder.spawnStarted)}`,
@@ -230,6 +240,36 @@ function formatLatency(pipeline: VoicePipelineDebugInfo): string[] {
   ];
 }
 
+function formatProviders(pipeline: VoicePipelineDebugInfo): string[] {
+  return [
+    `STT Provider: ${pipeline.providers.sttProvider ?? 'unknown'}`,
+    `Foreground LLM Provider: ${pipeline.providers.foregroundLlmProvider ?? 'unknown'}`,
+    `Background LLM Provider: ${pipeline.providers.backgroundLlmProvider ?? 'unknown'}`,
+    `TTS Provider: ${pipeline.providers.ttsProvider ?? 'unknown'}`,
+    `Playback Provider: ${pipeline.providers.playbackProvider ?? 'unknown'}`,
+    `Foreground Model: ${pipeline.providers.foregroundModel ?? 'unknown'}`,
+    `Background Model: ${pipeline.providers.backgroundModel ?? 'unknown'}`,
+    `Selected LLM Provider: ${pipeline.providers.lastSelectedLlmProvider ?? 'unknown'}`,
+    `Selected Model: ${pipeline.providers.lastSelectedModel ?? 'unknown'}`,
+    `Selected Lane: ${pipeline.providers.lastSelectedLane ?? 'unknown'}`,
+    `Router Reason: ${pipeline.providers.lastRouterReason ?? 'unknown'}`,
+  ];
+}
+
+function formatBargeIn(pipeline: VoicePipelineDebugInfo): string[] {
+  return [
+    `Interrupted By User: ${String(pipeline.interruptedByUser)}`,
+    `Detected At: ${pipeline.bargeIn.detectedAt ?? 'unknown'}`,
+    `Playback Interrupted At: ${pipeline.bargeIn.playbackInterruptedAt ?? 'unknown'}`,
+    `Listening Restarted At: ${pipeline.bargeIn.listeningRestartedAt ?? 'unknown'}`,
+    `Speech During Playback: ${String(pipeline.bargeIn.speechDetectedDuringPlayback)}`,
+    `Playback Stop Succeeded: ${String(pipeline.bargeIn.playbackStopSucceeded ?? 'unknown')}`,
+    `RMS Level: ${pipeline.bargeIn.rmsLevel ?? 'unknown'}`,
+    `Threshold: ${pipeline.bargeIn.threshold ?? 'unknown'}`,
+    `Min Speech Chunks: ${pipeline.bargeIn.minSpeechChunks ?? 'unknown'}`,
+  ];
+}
+
 function formatSttDebug(
   retranscribeResult: RetranscribeLastAudioResult | null,
   retranscribeError: string | null,
@@ -246,6 +286,14 @@ function formatSttDebug(
     `Transcript Length: ${debug.transcriptLength ?? 'unknown'}`,
     `Transcript: ${debug.transcript ?? retranscribeResult?.transcript ?? 'none'}`,
     `Failure Reason: ${debug.failureReason ?? 'none'}`,
+    `Stream Bytes Sent: ${debug.streamBytesSent ?? 'unknown'}`,
+    `Stream Non-Empty Chunks: ${debug.streamNonEmptyChunkCount ?? 'unknown'}`,
+    `Stream First Chunk At: ${debug.streamFirstChunkAt ?? 'unknown'}`,
+    `Stream Closed Before First Chunk: ${String(debug.streamClosedBeforeFirstChunk ?? 'unknown')}`,
+    `Capture Ended By: ${debug.captureEndedBy ?? 'unknown'}`,
+    `First Non-Empty Chunk Received: ${String(debug.firstNonEmptyChunkReceived ?? 'unknown')}`,
+    `Ended Before First Chunk: ${String(debug.endedBeforeFirstChunk ?? 'unknown')}`,
+    `STT Request Skipped Because Empty: ${String(debug.sttRequestSkippedBecauseEmpty ?? 'unknown')}`,
     `Raw Body: ${debug.rawBodyPreview ?? 'none'}`,
   ];
 }

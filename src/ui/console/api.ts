@@ -459,6 +459,8 @@ export function createConsoleApiRuntime(
         readStringProperty(provider, 'currentModel') ??
         readStringProperty(provider, 'model');
       const systemPrompt = config.gateway?.currentSession.getSystemPrompt() ?? '';
+      const providerSelections = config.gateway?.getProviderSelections?.() ?? null;
+      const lastRoutingDecision = config.gateway?.getLastLlmRoutingDecision?.() ?? null;
 
       response.json({
         checkedAt: new Date().toISOString(),
@@ -468,6 +470,8 @@ export function createConsoleApiRuntime(
           messageCount: config.gateway?.currentSession.messageCount ?? 0,
           provider: providerName,
           model: currentModel,
+          providerSelections,
+          lastRoutingDecision,
           systemPrompt,
           systemPromptLength: systemPrompt.length,
         },

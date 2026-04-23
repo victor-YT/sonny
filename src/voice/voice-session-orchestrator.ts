@@ -20,8 +20,14 @@ import {
   type RecorderDebugInfo,
   type RecorderDiagnosticEvent,
 } from './manual-recorder.js';
+import {
+  MANUAL_CAPTURE_STOP_REASON,
+  MicrophoneCaptureError,
+  type MicrophoneCaptureDiagnostics,
+} from './microphone.js';
 import type { SttDebugInfo, SttFailureReason } from './providers/stt.js';
 import {
+  type PlaybackBargeInEvent,
   type VoiceEnvironmentConfig,
   type VoiceGateway,
 } from './voice-gateway.js';
@@ -102,8 +108,10 @@ export interface VoiceLatencyTimestamps {
   sttFirstChunkAt: string | null;
   sttFinishedAt: string | null;
   gatewayStartedAt: string | null;
+  gatewayFinishedAt: string | null;
   firstTokenAt: string | null;
   firstSentenceReadyAt: string | null;
+  ttsStartedAt: string | null;
   ttsRequestStartedAt: string | null;
   ttsFirstAudioReadyAt: string | null;
   ttsFinishedAt: string | null;
@@ -121,6 +129,72 @@ export interface VoiceLatencyDurations {
   ttsFullSynthesisMs: number | null;
   stopToFirstSoundMs: number | null;
   stopToPlaybackFinishedMs: number | null;
+}
+
+export type VoiceTurnTimelineStageKey =
+  | 'barge_in_detected'
+  | 'playback_interrupted'
+  | 'listening_restarted'
+  | 'listening'
+  | 'silence_detected'
+  | 'stt'
+  | 'llm'
+  | 'tts'
+  | 'playback'
+  | 'idle';
+
+export type VoiceTurnTimelineStageStatus =
+  | 'pending'
+  | 'active'
+  | 'completed'
+  | 'interrupted'
+  | 'failed';
+
+export interface VoiceTurnTimelineTimestamps {
+  listeningStartedAt: string | null;
+  silenceDetectedAt: string | null;
+  sttStartedAt: string | null;
+  sttFinishedAt: string | null;
+  llmStartedAt: string | null;
+  firstTokenAt: string | null;
+  llmFinishedAt: string | null;
+  ttsStartedAt: string | null;
+  ttsFinishedAt: string | null;
+  playbackStartedAt: string | null;
+  playbackFinishedAt: string | null;
+  bargeInDetectedAt: string | null;
+  playbackInterruptedAt: string | null;
+  listeningRestartedAt: string | null;
+  idleStartedAt: string | null;
+}
+
+export interface VoiceTurnTimelineDurations {
+  listeningDurationMs: number | null;
+  silenceToSttMs: number | null;
+  sttDurationMs: number | null;
+  llmDurationMs: number | null;
+  ttsDurationMs: number | null;
+  playbackDurationMs: number | null;
+  totalTurnDurationMs: number | null;
+}
+
+export interface VoiceTurnTimelineStage {
+  key: VoiceTurnTimelineStageKey;
+  label: string;
+  status: VoiceTurnTimelineStageStatus;
+  startAt: string | null;
+  endAt: string | null;
+  durationMs: number | null;
+}
+
+export interface VoiceTurnTimelineDebug {
+  currentState: SonnyRuntimeState;
+  activeStage: VoiceTurnTimelineStageKey | null;
+  activeStageLabel: string | null;
+  lastCompletedStage: VoiceTurnTimelineStageKey | null;
+  timestamps: VoiceTurnTimelineTimestamps;
+  durations: VoiceTurnTimelineDurations;
+  stages: VoiceTurnTimelineStage[];
 }
 
 export interface VoicePipelineDebugInfo {
@@ -142,7 +216,16 @@ export interface VoicePipelineDebugInfo {
     transcript: string | null;
     transcriptLength: number | null;
     failureReason: SttFailureReason | null;
+    streamBytesSent: number | null;
+    streamNonEmptyChunkCount: number | null;
+    streamFirstChunkAt: string | null;
+    streamClosedBeforeFirstChunk: boolean | null;
+    captureEndedBy: MicrophoneCaptureDiagnostics['captureEndedBy'] | null;
+    firstNonEmptyChunkReceived: boolean | null;
+    endedBeforeFirstChunk: boolean | null;
+    sttRequestSkippedBecauseEmpty: boolean | null;
   };
+  endOfTurnReason: 'silence' | 'max_timeout' | 'manual' | 'interrupted' | 'unknown' | null;
   playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
   playerCommand: string | null;
   verdict: {
@@ -154,6 +237,31 @@ export interface VoicePipelineDebugInfo {
     playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
     fullTurnSuccess: boolean;
   };
+  providers: {
+    sttProvider: string | null;
+    foregroundLlmProvider: string | null;
+    backgroundLlmProvider: string | null;
+    ttsProvider: string | null;
+    playbackProvider: string | null;
+    foregroundModel: string | null;
+    backgroundModel: string | null;
+    lastSelectedLlmProvider: string | null;
+    lastSelectedModel: string | null;
+    lastSelectedLane: 'foreground' | 'background' | null;
+    lastRouterReason: string | null;
+  };
+  interruptedByUser: boolean;
+  bargeIn: {
+    detectedAt: string | null;
+    playbackInterruptedAt: string | null;
+    listeningRestartedAt: string | null;
+    speechDetectedDuringPlayback: boolean;
+    playbackStopSucceeded: boolean | null;
+    rmsLevel: number | null;
+    threshold: number | null;
+    minSpeechChunks: number | null;
+  };
+  turnTimeline: VoiceTurnTimelineDebug;
   flow: FlowKind | null;
   updatedAt: string | null;
 }
@@ -189,6 +297,7 @@ export class VoiceSessionOrchestrator {
   private activeFailureStage: PipelineStageName | null = null;
   private awaitingPlaybackCompletion = false;
   private playbackStartedForFlow = false;
+  private bargeInHandling = false;
   private lastReplayText: string | null = null;
   private lastAudioDebug: LastAudioDebugInfo = createEmptyAudioDebug();
   private pipelineDebug: VoicePipelineDebugInfo = createEmptyPipelineDebug();
@@ -208,6 +317,12 @@ export class VoiceSessionOrchestrator {
     this.voiceGateway.speaker.onEvent((event) => {
       void this.handleSpeakerEvent(event);
     });
+    this.voiceGateway.setPlaybackBargeInEnabledResolver(() =>
+      this.activeFlow === 'auto' || this.activeFlow === 'manual',
+    );
+    this.voiceGateway.setPlaybackBargeInHandler(async (event) =>
+      this.handlePlaybackBargeIn(event),
+    );
   }
 
   public get state(): RuntimeStateStore {
@@ -220,18 +335,30 @@ export class VoiceSessionOrchestrator {
 
   public getPipelineDebug(): VoicePipelineDebugInfo {
     const diagnostics = this.voiceGateway.speaker.getPlaybackDiagnostics();
-
-    return clonePipelineDebug({
+    const providers = this.buildProviderDebugInfo();
+    const snapshot = this.runtimeState.getSnapshot();
+    const pipelineDebug: VoicePipelineDebugInfo = {
       ...this.pipelineDebug,
       playbackMode: diagnostics.playbackMode,
       playerCommand: diagnostics.playerCommand,
+      providers,
       verdict: buildPipelineVerdict({
         ...this.pipelineDebug,
         playbackMode: diagnostics.playbackMode,
         playerCommand: diagnostics.playerCommand,
+        providers,
         verdict: this.pipelineDebug.verdict,
       }),
-    });
+      turnTimeline: buildVoiceTurnTimeline({
+        ...this.pipelineDebug,
+        playbackMode: diagnostics.playbackMode,
+        playerCommand: diagnostics.playerCommand,
+        providers,
+        verdict: this.pipelineDebug.verdict,
+      }, snapshot),
+    };
+
+    return clonePipelineDebug(pipelineDebug);
   }
 
   public getRecorderDebug(): RecorderRuntimeDebugInfo {
@@ -278,6 +405,14 @@ export class VoiceSessionOrchestrator {
           transcript: debug?.transcript ?? result.text,
           transcriptLength: debug?.transcriptLength ?? result.text.length,
           failureReason: debug?.failureReason ?? null,
+          streamBytesSent: debug?.streamBytesSent ?? null,
+          streamNonEmptyChunkCount: debug?.streamNonEmptyChunkCount ?? null,
+          streamFirstChunkAt: debug?.streamFirstChunkAt ?? null,
+          streamClosedBeforeFirstChunk: debug?.streamClosedBeforeFirstChunk ?? null,
+          captureEndedBy: debug?.captureEndedBy ?? null,
+          firstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
+          endedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
+          sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
         },
       };
     } catch (error: unknown) {
@@ -356,66 +491,19 @@ export class VoiceSessionOrchestrator {
     this.log('manual_listen_started', 'Automatic listen turn requested.');
 
     try {
-      await this.ensureServicesReady();
-
       if (this.manualRecorder !== undefined || this.activeInteractionTask !== undefined) {
         return;
       }
 
-      await this.voiceGateway.manager.interruptCurrentInteraction();
-      this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
-      this.runtimeState.setMicActive(true);
-      this.runtimeState.setPlaybackActive(false);
-      this.runtimeState.setUserPartialTranscript(null);
-      this.runtimeState.setAssistantPartialResponse(null);
-      this.resetPipelineDebug('auto');
-      this.markStage('recording', 'running');
-      this.markLatencyTimestamp('micStartAt');
-      this.recorderDebug = {
-        ...this.recorderDebug,
-        backend: this.environmentConfig.micRecordProgram ?? 'sox',
-        backendAvailable: true,
-        spawnStarted: true,
-        device:
-          this.environmentConfig.audioDeviceIndex === undefined
-            ? 'default'
-            : `input-index:${this.environmentConfig.audioDeviceIndex}`,
-        usingDefaultDevice: this.environmentConfig.audioDeviceIndex === undefined,
-        lastFailureReason: null,
-        lastSpawnError: null,
-      };
-      this.runtimeState.transition('listening', {
-        meta: {},
-      });
-      this.log('recording_started', 'Automatic microphone capture started.', {
-        sampleRate: this.getSampleRate(),
-        channels: this.getChannels(),
-        recorder: this.environmentConfig.micRecordProgram ?? 'sox',
-      });
-
-      const abortController = new AbortController();
-      this.activeCaptureAbortController = abortController;
-      const capture = await this.voiceGateway.microphone.capture({
-        signal: abortController.signal,
-        onSilenceDetected: () => {
-          this.handleSilenceDetected();
-        },
-      });
-
-      const interactionTask = this.runAutomaticTurn(capture, abortController.signal);
-      this.activeInteractionTask = interactionTask;
-      void interactionTask.finally(() => {
-        if (this.activeInteractionTask === interactionTask) {
-          this.activeInteractionTask = undefined;
-        }
-
-        if (this.activeCaptureAbortController === abortController) {
-          this.activeCaptureAbortController = undefined;
-        }
-      });
+      await this.beginAutomaticListening();
     } catch (error: unknown) {
       if (error instanceof ManualRecorderError) {
         this.recorderDebug = error.diagnostics;
+      }
+
+      if (error instanceof MicrophoneCaptureError) {
+        this.mergeMicrophoneDiagnostics(error.diagnostics);
+        this.applyLocalStreamingSttDebug(error.diagnostics);
       }
 
       const message = classifyRecordingStartError(error);
@@ -423,6 +511,72 @@ export class VoiceSessionOrchestrator {
       this.failStage('recording', 'recording_failed', message);
       throw new Error(message);
     }
+  }
+
+  private async beginAutomaticListening(
+    options: {
+      bargeInEvent?: PlaybackBargeInEvent;
+    } = {},
+  ): Promise<void> {
+    await this.ensureServicesReady();
+    await this.voiceGateway.manager.interruptCurrentInteraction();
+    this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
+    this.runtimeState.setMicActive(true);
+    this.runtimeState.setPlaybackActive(false);
+    this.runtimeState.setUserPartialTranscript(null);
+    this.runtimeState.setAssistantPartialResponse(null);
+    this.resetPipelineDebug('auto');
+    this.applyBargeInMetadata(options.bargeInEvent);
+    this.markStage('recording', 'running');
+    this.markLatencyTimestamp('micStartAt');
+    await this.syncMicrophoneEnvironment();
+    this.recorderDebug = {
+      ...this.recorderDebug,
+      backend: this.environmentConfig.micRecordProgram ?? 'sox',
+      spawnStarted: false,
+      lastFailureReason: null,
+      lastSpawnError: null,
+      lastCaptureError: null,
+      captureAborted: false,
+    };
+    this.runtimeState.transition('listening', {
+      meta: {
+        bargeIn: options.bargeInEvent !== undefined,
+      },
+    });
+    this.log(
+      'recording_started',
+      options.bargeInEvent === undefined
+        ? 'Automatic microphone capture started.'
+        : 'Playback interrupted. Returning to listening mode for barge-in capture.',
+      {
+        sampleRate: this.getSampleRate(),
+        channels: this.getChannels(),
+        recorder: this.environmentConfig.micRecordProgram ?? 'sox',
+        bargeIn: options.bargeInEvent !== undefined,
+      },
+    );
+
+    const abortController = new AbortController();
+    this.activeCaptureAbortController = abortController;
+    const capture = await this.voiceGateway.microphone.capture({
+      signal: abortController.signal,
+      onSilenceDetected: () => {
+        this.handleSilenceDetected();
+      },
+    });
+
+    const interactionTask = this.runAutomaticTurn(capture, abortController.signal);
+    this.activeInteractionTask = interactionTask;
+    void interactionTask.catch(() => undefined).finally(() => {
+      if (this.activeInteractionTask === interactionTask) {
+        this.activeInteractionTask = undefined;
+      }
+
+      if (this.activeCaptureAbortController === abortController) {
+        this.activeCaptureAbortController = undefined;
+      }
+    });
   }
 
   public async stopListening(): Promise<void> {
@@ -460,6 +614,29 @@ export class VoiceSessionOrchestrator {
       }
     }
 
+    if (
+      this.activeCaptureAbortController !== undefined &&
+      this.activeFlow === 'auto'
+    ) {
+      const abortController = this.activeCaptureAbortController;
+
+      this.activeCaptureAbortController = undefined;
+      this.runtimeState.setMicActive(false);
+      this.markLatencyTimestamp('stopListeningAt');
+      this.markStage('recording', 'succeeded');
+      this.runtimeState.transition('thinking', {
+        meta: {
+          captureEndedBy: 'manual',
+        },
+      });
+      this.log('manual_capture_stop_requested', 'Manual stop requested. Finalizing live microphone capture.', {
+        captureEndedBy: 'manual',
+        ...this.buildLatencyLogMeta(),
+      });
+      abortController.abort(MANUAL_CAPTURE_STOP_REASON);
+      return;
+    }
+
     this.activeCaptureAbortController?.abort();
     this.activeCaptureAbortController = undefined;
     await this.voiceGateway.manager.interruptCurrentInteraction();
@@ -493,10 +670,16 @@ export class VoiceSessionOrchestrator {
 
           this.lastAudioDebug = audioDebug;
           this.logRecordedAudio(audio, audioDebug);
-          this.validateRecordedAudio(audio, audioDebug);
-        });
+          this.validateRecordedAudio(audio, audioDebug, {
+            rejectLowQuality: false,
+          });
+        })
+        .then(
+          () => null,
+          (error: unknown) => error instanceof Error ? error : new Error(toErrorMessage(error)),
+        );
 
-      await this.voiceGateway.manager.processCapture(capture, {
+      const processError = await this.voiceGateway.manager.processCapture(capture, {
         stt: {
           language: this.environmentConfig.sttLanguage,
           sampleRateHertz: this.getSampleRate(),
@@ -506,12 +689,34 @@ export class VoiceSessionOrchestrator {
         tts: {
           voice: this.environmentConfig.ttsVoice,
         },
-      });
-      await persistedAudioPromise;
+      }).then(
+        () => null,
+        (error: unknown) => error instanceof Error ? error : new Error(toErrorMessage(error)),
+      );
+      const persistedAudioError = await persistedAudioPromise;
+
+      if (persistedAudioError !== null && persistedAudioError !== undefined) {
+        throw persistedAudioError;
+      }
+
+      if (processError !== null) {
+        if (this.shouldRecoverFromLiveEmptyTranscript(processError)) {
+          this.recoverFromLiveEmptyTranscript(processError);
+          return;
+        }
+
+        throw processError;
+      }
+
       this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
     } catch (error: unknown) {
-      if (signal.aborted) {
+      if (signal.aborted && signal.reason !== MANUAL_CAPTURE_STOP_REASON) {
         return;
+      }
+
+      if (error instanceof MicrophoneCaptureError) {
+        this.mergeMicrophoneDiagnostics(error.diagnostics);
+        this.applyLocalStreamingSttDebug(error.diagnostics);
       }
 
       if (this.findFailedPipelineStage() !== null) {
@@ -680,6 +885,24 @@ export class VoiceSessionOrchestrator {
         'warn',
       );
     }
+
+    if (audioDebug.suspectedSilent) {
+      this.refreshRecorderLikelyFailureCause();
+      this.log(
+        'recording_input_silent',
+        this.recorderDebug.likelyFailureCause ??
+          'No usable microphone input detected. Check macOS microphone permissions and default input device.',
+        {
+          bytesCaptured: this.recorderDebug.bytesCaptured ?? null,
+          rmsLevel: this.recorderDebug.rmsLevel ?? null,
+          peakAmplitude: this.recorderDebug.peakAmplitude ?? null,
+          silentRatio: this.recorderDebug.silentRatio ?? null,
+          device: this.recorderDebug.device,
+          defaultInputDeviceName: this.recorderDebug.defaultInputDeviceName ?? null,
+        },
+        'warn',
+      );
+    }
   }
 
   public async testTts(text: string, voice?: string): Promise<void> {
@@ -789,6 +1012,112 @@ export class VoiceSessionOrchestrator {
     });
   }
 
+  private async handlePlaybackBargeIn(
+    event: PlaybackBargeInEvent,
+  ): Promise<boolean> {
+    if (
+      this.bargeInHandling ||
+      (this.activeFlow !== 'auto' && this.activeFlow !== 'manual')
+    ) {
+      return false;
+    }
+
+    this.bargeInHandling = true;
+
+    try {
+      const previousTask = this.activeInteractionTask;
+
+      this.log('barge_in_detected', 'User speech detected during playback.', {
+        detectedAt: event.detectedAt,
+        rmsLevel: event.rmsLevel,
+        threshold: event.threshold,
+        minSpeechChunks: event.minSpeechChunks,
+        speechChunks: event.speechChunks,
+      });
+      this.runtimeState.markConversationInterrupted();
+      this.markStage('playback', 'interrupted');
+      this.pipelineDebug = {
+        ...this.pipelineDebug,
+        interruptedByUser: true,
+        bargeIn: {
+          ...this.pipelineDebug.bargeIn,
+          detectedAt: event.detectedAt,
+          speechDetectedDuringPlayback: true,
+          rmsLevel: event.rmsLevel,
+          threshold: event.threshold,
+          minSpeechChunks: event.minSpeechChunks,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      await this.voiceGateway.manager.interruptCurrentInteraction();
+      await previousTask?.catch(() => undefined);
+      this.activeInteractionTask = undefined;
+      this.activeCaptureAbortController = undefined;
+      this.awaitingPlaybackCompletion = false;
+      this.playbackStartedForFlow = false;
+      this.runtimeState.setPlaybackActive(false);
+      this.runtimeState.setMicActive(false);
+      this.runtimeState.setUserPartialTranscript(null);
+      this.runtimeState.setAssistantPartialResponse(null);
+      this.pipelineDebug = {
+        ...this.pipelineDebug,
+        bargeIn: {
+          ...this.pipelineDebug.bargeIn,
+          playbackInterruptedAt: new Date().toISOString(),
+          playbackStopSucceeded: true,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      this.log('playback_interrupted_by_user', 'Playback interrupted by user barge-in.', {
+        detectedAt: event.detectedAt,
+        playbackInterruptedAt: this.pipelineDebug.bargeIn.playbackInterruptedAt,
+        playbackStopSucceeded: true,
+      });
+
+      await this.beginAutomaticListening({
+        bargeInEvent: event,
+      });
+
+      this.pipelineDebug = {
+        ...this.pipelineDebug,
+        bargeIn: {
+          ...this.pipelineDebug.bargeIn,
+          listeningRestartedAt: new Date().toISOString(),
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      this.log('barge_in_listening_restarted', 'Listening restarted after playback interruption.', {
+        listeningRestartedAt: this.pipelineDebug.bargeIn.listeningRestartedAt,
+      });
+
+      return true;
+    } catch (error: unknown) {
+      this.pipelineDebug = {
+        ...this.pipelineDebug,
+        interruptedByUser: true,
+        bargeIn: {
+          ...this.pipelineDebug.bargeIn,
+          detectedAt: event.detectedAt,
+          speechDetectedDuringPlayback: true,
+          playbackStopSucceeded: false,
+          rmsLevel: event.rmsLevel,
+          threshold: event.threshold,
+          minSpeechChunks: event.minSpeechChunks,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      this.log('playback_interrupted_by_user', 'Playback barge-in was detected but restart failed.', {
+        detectedAt: event.detectedAt,
+        playbackStopSucceeded: false,
+        error: toErrorMessage(error),
+      }, 'error');
+      return false;
+    } finally {
+      this.bargeInHandling = false;
+    }
+  }
+
   public async resetToIdle(): Promise<void> {
     if (this.manualRecorder !== undefined) {
       await this.manualRecorder.cancel();
@@ -822,7 +1151,7 @@ export class VoiceSessionOrchestrator {
       ),
       this.checkHealth(
         'vad',
-        normalizeOptionalHealthUrl(process.env.VAD_URL ?? 'http://127.0.0.1:8003'),
+        normalizeOptionalHealthUrl(this.environmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003'),
       ),
     ]);
   }
@@ -1014,6 +1343,7 @@ export class VoiceSessionOrchestrator {
         return;
       }
 
+      this.markLatencyTimestamp('gatewayFinishedAt');
       this.markStage('gateway', 'succeeded');
       this.log('gateway_finished', 'Gateway response completed.', {
         responseLength: event.text.length,
@@ -1042,6 +1372,10 @@ export class VoiceSessionOrchestrator {
     }
 
     if (event.type === 'error' && event.error !== undefined) {
+      if (this.shouldRecoverFromLiveEmptyTranscript(event.error)) {
+        return;
+      }
+
       this.failActiveFlow(this.activeFailureStage ?? 'recording', event.error.message);
       return;
     }
@@ -1079,6 +1413,7 @@ export class VoiceSessionOrchestrator {
 
       if (event.state === 'synthesizing') {
         if (this.pipelineDebug.tts.status !== 'running') {
+          this.markLatencyTimestamp('ttsStartedAt');
           this.markStage('tts', 'running');
           this.log('tts_started', 'TTS generation started.', this.buildLatencyLogMeta());
         }
@@ -1115,7 +1450,11 @@ export class VoiceSessionOrchestrator {
 
       this.runtimeState.setPlaybackActive(active);
 
-      if (!active && this.playbackStartedForFlow) {
+      if (
+        !active &&
+        this.playbackStartedForFlow &&
+        this.pipelineDebug.playback.status !== 'interrupted'
+      ) {
         this.markLatencyTimestamp('playbackFinishedAt');
         this.markStage('playback', 'succeeded');
         this.runtimeState.markConversationCompleted();
@@ -1171,7 +1510,16 @@ export class VoiceSessionOrchestrator {
         transcript: debug?.transcript ?? null,
         transcriptLength: debug?.transcriptLength ?? null,
         failureReason: debug?.failureReason ?? null,
+        streamBytesSent: debug?.streamBytesSent ?? null,
+        streamNonEmptyChunkCount: debug?.streamNonEmptyChunkCount ?? null,
+        streamFirstChunkAt: debug?.streamFirstChunkAt ?? null,
+        streamClosedBeforeFirstChunk: debug?.streamClosedBeforeFirstChunk ?? null,
+        captureEndedBy: debug?.captureEndedBy ?? null,
+        firstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
+        endedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
+        sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
       },
+      endOfTurnReason: this.recorderDebug.endOfTurnReason ?? null,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1207,8 +1555,10 @@ export class VoiceSessionOrchestrator {
       sttFirstChunkAt: timestamps.sttFirstChunkAt,
       sttFinishedAt: timestamps.sttFinishedAt,
       gatewayStartedAt: timestamps.gatewayStartedAt,
+      gatewayFinishedAt: timestamps.gatewayFinishedAt,
       firstTokenAt: timestamps.firstTokenAt,
       firstSentenceReadyAt: timestamps.firstSentenceReadyAt,
+      ttsStartedAt: timestamps.ttsStartedAt,
       ttsRequestStartedAt: timestamps.ttsRequestStartedAt,
       ttsFirstAudioReadyAt: timestamps.ttsFirstAudioReadyAt,
       ttsFinishedAt: timestamps.ttsFinishedAt,
@@ -1223,6 +1573,49 @@ export class VoiceSessionOrchestrator {
       ttsFullSynthesisMs: durations.ttsFullSynthesisMs,
       stopToFirstSoundMs: durations.stopToFirstSoundMs,
       stopToPlaybackFinishedMs: durations.stopToPlaybackFinishedMs,
+    };
+  }
+
+  private buildProviderDebugInfo(): VoicePipelineDebugInfo['providers'] {
+    const selections = this.gateway.getProviderSelections();
+    const lastDecision = this.gateway.getLastLlmRoutingDecision();
+
+    return {
+      sttProvider: selections?.sttProvider ?? this.voiceGateway.manager.sttProviderName,
+      foregroundLlmProvider: selections?.foregroundLlmProvider ?? null,
+      backgroundLlmProvider: selections?.backgroundLlmProvider ?? null,
+      ttsProvider: selections?.ttsProvider ?? this.voiceGateway.manager.ttsProviderName,
+      playbackProvider: selections?.playbackProvider ?? this.voiceGateway.manager.playbackProviderName,
+      foregroundModel: selections?.foregroundModel ?? null,
+      backgroundModel: selections?.backgroundModel ?? null,
+      lastSelectedLlmProvider: lastDecision?.providerId ?? null,
+      lastSelectedModel: lastDecision?.model ?? null,
+      lastSelectedLane: lastDecision?.lane ?? null,
+      lastRouterReason: lastDecision?.reason ?? null,
+    };
+  }
+
+  private applyBargeInMetadata(event: PlaybackBargeInEvent | undefined): void {
+    if (event === undefined) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    this.pipelineDebug = {
+      ...this.pipelineDebug,
+      interruptedByUser: true,
+      bargeIn: {
+        detectedAt: event.detectedAt,
+        playbackInterruptedAt: now,
+        listeningRestartedAt: now,
+        speechDetectedDuringPlayback: true,
+        playbackStopSucceeded: true,
+        rmsLevel: event.rmsLevel,
+        threshold: event.threshold,
+        minSpeechChunks: event.minSpeechChunks,
+      },
+      updatedAt: now,
     };
   }
 
@@ -1241,6 +1634,43 @@ export class VoiceSessionOrchestrator {
       sttTranscript: debug?.transcript ?? null,
       sttTranscriptLength: debug?.transcriptLength ?? null,
       sttFailureReason: debug?.failureReason ?? null,
+      sttStreamBytesSent: debug?.streamBytesSent ?? null,
+      sttStreamNonEmptyChunkCount: debug?.streamNonEmptyChunkCount ?? null,
+      sttStreamFirstChunkAt: debug?.streamFirstChunkAt ?? null,
+      sttStreamClosedBeforeFirstChunk: debug?.streamClosedBeforeFirstChunk ?? null,
+      sttCaptureEndedBy: debug?.captureEndedBy ?? null,
+      sttFirstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
+      sttEndedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
+      sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
+    };
+  }
+
+  private applyLocalStreamingSttDebug(
+    diagnostics: MicrophoneCaptureDiagnostics,
+  ): void {
+    const shouldMarkEmptyStreamingSkip = diagnostics.endedBeforeFirstChunk
+      || diagnostics.captureEndedBy === 'max_timeout'
+      || diagnostics.lastCaptureError?.includes('capture_timed_out_before_audio') === true;
+
+    if (!shouldMarkEmptyStreamingSkip) {
+      return;
+    }
+
+    this.pipelineDebug = {
+      ...this.pipelineDebug,
+      sttDebug: {
+        ...this.pipelineDebug.sttDebug,
+        failureReason: 'stt_empty_audio',
+        streamBytesSent: 0,
+        streamNonEmptyChunkCount: 0,
+        streamFirstChunkAt: null,
+        streamClosedBeforeFirstChunk: true,
+        captureEndedBy: diagnostics.captureEndedBy,
+        firstNonEmptyChunkReceived: diagnostics.firstNonEmptyChunkReceived,
+        endedBeforeFirstChunk: diagnostics.endedBeforeFirstChunk,
+        sttRequestSkippedBecauseEmpty: true,
+      },
+      updatedAt: new Date().toISOString(),
     };
   }
 
@@ -1301,6 +1731,8 @@ export class VoiceSessionOrchestrator {
     await writeFile(DEBUG_AUDIO_FILE, audio);
     const metadata = await stat(DEBUG_AUDIO_FILE);
     const analyzed = analyzeAudioBuffer(audio, this.getSampleRate(), this.getChannels());
+    this.recorderDebug = enrichRecorderDebugWithAudioMetrics(this.recorderDebug, analyzed, audio.byteLength);
+    this.refreshRecorderLikelyFailureCause();
 
     return {
       exists: true,
@@ -1333,7 +1765,12 @@ export class VoiceSessionOrchestrator {
   private validateRecordedAudio(
     audio: Buffer,
     audioDebug: LastAudioDebugInfo,
+    options: {
+      rejectLowQuality?: boolean;
+    } = {},
   ): void {
+    const rejectLowQuality = options.rejectLowQuality ?? true;
+
     if (audio.byteLength === 0) {
       throw new Error('No audio data was captured.');
     }
@@ -1356,6 +1793,84 @@ export class VoiceSessionOrchestrator {
         `Recorded audio is too short (${audioDebug.durationMs}ms).`,
       );
     }
+
+    if (
+      rejectLowQuality &&
+      (
+        audioDebug.audioQualityHint === 'mostly_silence' ||
+        audioDebug.audioQualityHint === 'too_quiet'
+      )
+    ) {
+      throw new Error(
+        'No usable microphone input detected. Check macOS microphone permissions and default input device.',
+      );
+    }
+  }
+
+  private async syncMicrophoneEnvironment(): Promise<void> {
+    try {
+      const diagnostics = await this.voiceGateway.microphone.inspectEnvironment();
+      this.mergeMicrophoneDiagnostics(diagnostics);
+    } catch (error: unknown) {
+      this.recorderDebug = {
+        ...this.recorderDebug,
+        lastCaptureError: toErrorMessage(error),
+      };
+    }
+  }
+
+  private mergeMicrophoneDiagnostics(
+    diagnostics: MicrophoneCaptureDiagnostics,
+  ): void {
+    this.recorderDebug = {
+      ...this.recorderDebug,
+      backend: diagnostics.backend,
+      backendPath: diagnostics.backendPath,
+      backendAvailable: diagnostics.backendAvailable,
+      command: diagnostics.command,
+      args: [...diagnostics.args],
+      inputSource: diagnostics.inputSource,
+      requestedSampleRateHertz: diagnostics.requestedSampleRateHertz,
+      requestedChannels: diagnostics.requestedChannels,
+      outputFormat: diagnostics.outputFormat,
+      outputTransport: diagnostics.outputTransport,
+      debugMode: diagnostics.debugMode,
+      device: diagnostics.device,
+      defaultInputDeviceName: diagnostics.defaultInputDeviceName,
+      availableInputDevices: [...diagnostics.availableInputDevices],
+      usingDefaultDevice: diagnostics.usingDefaultDevice,
+      bytesCaptured: diagnostics.bytesCaptured,
+      captureEndedBy: diagnostics.captureEndedBy,
+      endOfTurnReason: diagnostics.endOfTurnReason,
+      firstNonEmptyChunkReceived: diagnostics.firstNonEmptyChunkReceived,
+      endedBeforeFirstChunk: diagnostics.endedBeforeFirstChunk,
+      vadRequestCount: diagnostics.vadRequestCount,
+      vadSpeechChunkCount: diagnostics.vadSpeechChunkCount,
+      vadSilenceChunkCount: diagnostics.vadSilenceChunkCount,
+      vadDroppedChunkCount: diagnostics.vadDroppedChunkCount,
+      vadSpeechMs: diagnostics.vadSpeechMs,
+      vadSilenceMs: diagnostics.vadSilenceMs,
+      speechStarted: diagnostics.speechStarted,
+      silenceDetected: diagnostics.silenceDetected,
+      speechThresholdMs: diagnostics.speechThresholdMs,
+      silenceThresholdMs: diagnostics.silenceThresholdMs,
+      minAutoStopCaptureMs: diagnostics.minAutoStopCaptureMs,
+      micGainDb: diagnostics.micGainDb,
+      lastChunkRmsLevel: diagnostics.lastChunkRmsLevel,
+      avgChunkRmsLevel: diagnostics.avgChunkRmsLevel,
+      maxChunkRmsLevel: diagnostics.maxChunkRmsLevel,
+      captureAborted: diagnostics.captureAborted,
+      lastCaptureError: diagnostics.lastCaptureError,
+      likelyFailureCause: diagnostics.likelyFailureCause ?? this.recorderDebug.likelyFailureCause,
+    };
+    this.refreshRecorderLikelyFailureCause();
+  }
+
+  private refreshRecorderLikelyFailureCause(): void {
+    this.recorderDebug = {
+      ...this.recorderDebug,
+      likelyFailureCause: inferRecorderFailureCause(this.recorderDebug),
+    };
   }
 
   private getSampleRate(): number {
@@ -1407,6 +1922,61 @@ export class VoiceSessionOrchestrator {
         this.failStage('recording', 'recording_failed', classifyRecordingStopError(message));
         break;
     }
+  }
+
+  private shouldRecoverFromLiveEmptyTranscript(error: Error): boolean {
+    return this.activeFlow === 'auto' && isSttEmptyTranscriptError(error.message);
+  }
+
+  private recoverFromLiveEmptyTranscript(error: Error): void {
+    this.syncSttDebugInfo();
+    this.markLatencyTimestamp('sttFinishedAt');
+
+    this.refreshRecorderLikelyFailureCause();
+
+    const audioQualityHint = this.lastAudioDebug.audioQualityHint;
+    const silentInput =
+      this.lastAudioDebug.suspectedSilent ||
+      this.recorderDebug.inputAppearsSilent === true;
+    const message = silentInput
+      ? this.recorderDebug.likelyFailureCause ??
+        'No usable microphone input was captured; returning to idle.'
+      : 'No speech was recognized from the live microphone turn; returning to idle.';
+
+    if (silentInput) {
+      this.markStage('recording', 'failed', message);
+      this.markStage('stt', 'idle');
+    } else {
+      this.markStage('stt', 'failed', message);
+    }
+
+    this.runtimeState.setMicActive(false);
+    this.runtimeState.setPlaybackActive(false);
+    this.runtimeState.setUserPartialTranscript(null);
+    this.runtimeState.setAssistantPartialResponse(null);
+    this.awaitingPlaybackCompletion = false;
+    this.playbackStartedForFlow = false;
+    this.activeFlow = null;
+    this.activeFailureStage = null;
+    this.runtimeState.transition('idle', {
+      level: 'warn',
+      message,
+      meta: {
+        reason: 'stt_empty_transcript',
+        audioQualityHint,
+      },
+    });
+    this.log('stt_empty_transcript_ignored', message, {
+      reason: 'stt_empty_transcript',
+      sourceError: classifySttError(error.message),
+      audioQualityHint,
+      inputAppearsSilent: silentInput,
+      likelyFailureCause: this.recorderDebug.likelyFailureCause ?? null,
+      rmsLevel: this.lastAudioDebug.rmsLevel,
+      peakAmplitude: this.lastAudioDebug.peakAmplitude,
+      silentRatio: this.lastAudioDebug.silentRatio,
+      ...this.buildSttLogMeta(),
+    }, 'warn');
   }
 
   private failStage(
@@ -1529,7 +2099,16 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       transcript: null,
       transcriptLength: null,
       failureReason: null,
+      streamBytesSent: null,
+      streamNonEmptyChunkCount: null,
+      streamFirstChunkAt: null,
+      streamClosedBeforeFirstChunk: null,
+      captureEndedBy: null,
+      firstNonEmptyChunkReceived: null,
+      endedBeforeFirstChunk: null,
+      sttRequestSkippedBecauseEmpty: null,
     },
+    endOfTurnReason: null,
     playbackMode: 'unknown',
     playerCommand: null,
     verdict: {
@@ -1541,6 +2120,31 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       playbackMode: 'unknown',
       fullTurnSuccess: false,
     },
+    providers: {
+      sttProvider: null,
+      foregroundLlmProvider: null,
+      backgroundLlmProvider: null,
+      ttsProvider: null,
+      playbackProvider: null,
+      foregroundModel: null,
+      backgroundModel: null,
+      lastSelectedLlmProvider: null,
+      lastSelectedModel: null,
+      lastSelectedLane: null,
+      lastRouterReason: null,
+    },
+    interruptedByUser: false,
+    bargeIn: {
+      detectedAt: null,
+      playbackInterruptedAt: null,
+      listeningRestartedAt: null,
+      speechDetectedDuringPlayback: false,
+      playbackStopSucceeded: null,
+      rmsLevel: null,
+      threshold: null,
+      minSpeechChunks: null,
+    },
+    turnTimeline: createEmptyTurnTimeline(),
     flow,
     updatedAt: null,
   };
@@ -1551,11 +2155,49 @@ function createEmptyRecorderDebug(): RecorderRuntimeDebugInfo {
     backend: 'sox',
     backendPath: null,
     backendAvailable: false,
+    command: null,
+    args: [],
+    inputSource: null,
+    requestedSampleRateHertz: 16_000,
+    requestedChannels: 1,
+    outputFormat: null,
+    outputTransport: null,
+    debugMode: null,
     device: 'default',
+    defaultInputDeviceName: null,
+    availableInputDevices: [],
     usingDefaultDevice: true,
     spawnStarted: false,
     firstChunkReceived: false,
     startTimeoutMs: 5_000,
+    bytesCaptured: null,
+    captureEndedBy: 'unknown',
+    endOfTurnReason: 'unknown',
+    firstNonEmptyChunkReceived: false,
+    endedBeforeFirstChunk: false,
+    vadRequestCount: 0,
+    vadSpeechChunkCount: 0,
+    vadSilenceChunkCount: 0,
+    vadDroppedChunkCount: 0,
+    vadSpeechMs: 0,
+    vadSilenceMs: 0,
+    speechStarted: false,
+    silenceDetected: false,
+    speechThresholdMs: null,
+    silenceThresholdMs: null,
+    minAutoStopCaptureMs: null,
+    micGainDb: null,
+    lastChunkRmsLevel: null,
+    avgChunkRmsLevel: null,
+    maxChunkRmsLevel: null,
+    peakAmplitude: null,
+    rmsLevel: null,
+    silentRatio: null,
+    inputAppearsSilent: null,
+    audioQualityHint: null,
+    likelyFailureCause: null,
+    captureAborted: false,
+    lastCaptureError: null,
     lastStderr: null,
     lastSpawnError: null,
     lastFailureReason: null,
@@ -1586,11 +2228,39 @@ function clonePipelineDebug(value: VoicePipelineDebugInfo): VoicePipelineDebugIn
       transcript: value.sttDebug.transcript,
       transcriptLength: value.sttDebug.transcriptLength,
       failureReason: value.sttDebug.failureReason,
+      streamBytesSent: value.sttDebug.streamBytesSent,
+      streamNonEmptyChunkCount: value.sttDebug.streamNonEmptyChunkCount,
+      streamFirstChunkAt: value.sttDebug.streamFirstChunkAt,
+      streamClosedBeforeFirstChunk: value.sttDebug.streamClosedBeforeFirstChunk,
+      captureEndedBy: value.sttDebug.captureEndedBy,
+      firstNonEmptyChunkReceived: value.sttDebug.firstNonEmptyChunkReceived,
+      endedBeforeFirstChunk: value.sttDebug.endedBeforeFirstChunk,
+      sttRequestSkippedBecauseEmpty: value.sttDebug.sttRequestSkippedBecauseEmpty,
     },
+    endOfTurnReason: value.endOfTurnReason,
     playbackMode: value.playbackMode,
     playerCommand: value.playerCommand,
     verdict: {
       ...value.verdict,
+    },
+    providers: {
+      ...value.providers,
+    },
+    interruptedByUser: value.interruptedByUser,
+    bargeIn: {
+      ...value.bargeIn,
+    },
+    turnTimeline: {
+      ...value.turnTimeline,
+      timestamps: {
+        ...value.turnTimeline.timestamps,
+      },
+      durations: {
+        ...value.turnTimeline.durations,
+      },
+      stages: value.turnTimeline.stages.map((stage) => ({
+        ...stage,
+      })),
     },
     flow: value.flow,
     updatedAt: value.updatedAt,
@@ -1632,8 +2302,10 @@ function createEmptyLatencyDebug(): {
       sttFirstChunkAt: null,
       sttFinishedAt: null,
       gatewayStartedAt: null,
+      gatewayFinishedAt: null,
       firstTokenAt: null,
       firstSentenceReadyAt: null,
+      ttsStartedAt: null,
       ttsRequestStartedAt: null,
       ttsFirstAudioReadyAt: null,
       ttsFinishedAt: null,
@@ -1651,6 +2323,42 @@ function createEmptyLatencyDebug(): {
       stopToFirstSoundMs: null,
       stopToPlaybackFinishedMs: null,
     },
+  };
+}
+
+function createEmptyTurnTimeline(): VoiceTurnTimelineDebug {
+  return {
+    currentState: 'idle',
+    activeStage: null,
+    activeStageLabel: null,
+    lastCompletedStage: null,
+    timestamps: {
+      listeningStartedAt: null,
+      silenceDetectedAt: null,
+      sttStartedAt: null,
+      sttFinishedAt: null,
+      llmStartedAt: null,
+      firstTokenAt: null,
+      llmFinishedAt: null,
+      ttsStartedAt: null,
+      ttsFinishedAt: null,
+      playbackStartedAt: null,
+      playbackFinishedAt: null,
+      bargeInDetectedAt: null,
+      playbackInterruptedAt: null,
+      listeningRestartedAt: null,
+      idleStartedAt: null,
+    },
+    durations: {
+      listeningDurationMs: null,
+      silenceToSttMs: null,
+      sttDurationMs: null,
+      llmDurationMs: null,
+      ttsDurationMs: null,
+      playbackDurationMs: null,
+      totalTurnDurationMs: null,
+    },
+    stages: [],
   };
 }
 
@@ -1695,6 +2403,312 @@ function computeLatencyDebug(
       ),
     },
   };
+}
+
+function buildVoiceTurnTimeline(
+  pipeline: VoicePipelineDebugInfo,
+  snapshot: ReturnType<RuntimeStateStore['getSnapshot']>,
+): VoiceTurnTimelineDebug {
+  const timestamps: VoiceTurnTimelineTimestamps = {
+    listeningStartedAt: pipeline.latency.timestamps.micStartAt,
+    silenceDetectedAt: pipeline.latency.timestamps.silenceDetectedAt,
+    sttStartedAt: pipeline.latency.timestamps.sttStartedAt,
+    sttFinishedAt: pipeline.latency.timestamps.sttFinishedAt,
+    llmStartedAt: pipeline.latency.timestamps.gatewayStartedAt,
+    firstTokenAt: pipeline.latency.timestamps.firstTokenAt,
+    llmFinishedAt:
+      pipeline.latency.timestamps.gatewayFinishedAt
+      ?? resolveStageResolvedAt(pipeline.gateway),
+    ttsStartedAt:
+      pipeline.latency.timestamps.ttsStartedAt
+      ?? pipeline.latency.timestamps.ttsRequestStartedAt,
+    ttsFinishedAt: pipeline.latency.timestamps.ttsFinishedAt,
+    playbackStartedAt: pipeline.latency.timestamps.playbackStartedAt,
+    playbackFinishedAt: pipeline.latency.timestamps.playbackFinishedAt,
+    bargeInDetectedAt: pipeline.bargeIn.detectedAt,
+    playbackInterruptedAt: pipeline.bargeIn.playbackInterruptedAt,
+    listeningRestartedAt: pipeline.bargeIn.listeningRestartedAt,
+    idleStartedAt: snapshot.currentState === 'idle' ? snapshot.updatedAt : null,
+  };
+
+  const playbackEndAt = timestamps.playbackFinishedAt ?? timestamps.playbackInterruptedAt;
+  const durations: VoiceTurnTimelineDurations = {
+    listeningDurationMs: diffMs(
+      timestamps.listeningStartedAt,
+      timestamps.silenceDetectedAt ?? pipeline.latency.timestamps.stopListeningAt,
+    ),
+    silenceToSttMs: diffMs(timestamps.silenceDetectedAt, timestamps.sttStartedAt),
+    sttDurationMs: diffMs(timestamps.sttStartedAt, timestamps.sttFinishedAt),
+    llmDurationMs: diffMs(timestamps.llmStartedAt, timestamps.llmFinishedAt),
+    ttsDurationMs: diffMs(timestamps.ttsStartedAt, timestamps.ttsFinishedAt),
+    playbackDurationMs: diffMs(timestamps.playbackStartedAt, playbackEndAt),
+    totalTurnDurationMs: diffMs(timestamps.listeningStartedAt, playbackEndAt),
+  };
+
+  const stageOrder: VoiceTurnTimelineStageKey[] = pipeline.bargeIn.detectedAt === null
+    ? ['listening', 'silence_detected', 'stt', 'llm', 'tts', 'playback', 'idle']
+    : [
+        'barge_in_detected',
+        'playback_interrupted',
+        'listening_restarted',
+        'listening',
+        'silence_detected',
+        'stt',
+        'llm',
+        'tts',
+        'playback',
+        'idle',
+      ];
+  const activeStage = resolveTimelineActiveStage(pipeline, snapshot.currentState);
+  const stages = stageOrder.map((key) =>
+    buildVoiceTurnTimelineStage(key, pipeline, timestamps, durations, activeStage, snapshot.currentState),
+  );
+  const lastCompletedStage = [...stages]
+    .reverse()
+    .find((stage) => stage.status === 'completed' || stage.status === 'interrupted')
+    ?.key ?? null;
+
+  return {
+    currentState: snapshot.currentState,
+    activeStage,
+    activeStageLabel: activeStage === null ? null : TIMELINE_STAGE_LABELS[activeStage],
+    lastCompletedStage,
+    timestamps,
+    durations,
+    stages,
+  };
+}
+
+const TIMELINE_STAGE_LABELS: Record<VoiceTurnTimelineStageKey, string> = {
+  barge_in_detected: 'Barge-In Detected',
+  playback_interrupted: 'Playback Interrupted',
+  listening_restarted: 'Listening Restarted',
+  listening: 'Listening',
+  silence_detected: 'Silence Detected',
+  stt: 'STT',
+  llm: 'LLM',
+  tts: 'TTS',
+  playback: 'Playback',
+  idle: 'Idle',
+};
+
+function buildVoiceTurnTimelineStage(
+  key: VoiceTurnTimelineStageKey,
+  pipeline: VoicePipelineDebugInfo,
+  timestamps: VoiceTurnTimelineTimestamps,
+  durations: VoiceTurnTimelineDurations,
+  activeStage: VoiceTurnTimelineStageKey | null,
+  currentState: SonnyRuntimeState,
+): VoiceTurnTimelineStage {
+  const activeStatus: VoiceTurnTimelineStageStatus = activeStage === key ? 'active' : 'pending';
+
+  switch (key) {
+    case 'barge_in_detected':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status: timestamps.bargeInDetectedAt === null ? activeStatus : 'completed',
+        startAt: timestamps.bargeInDetectedAt,
+        endAt: timestamps.bargeInDetectedAt,
+        durationMs: null,
+      };
+    case 'playback_interrupted':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status:
+          pipeline.playback.status === 'failed'
+            ? 'failed'
+            : timestamps.playbackInterruptedAt === null
+              ? activeStatus
+              : 'interrupted',
+        startAt: timestamps.playbackStartedAt,
+        endAt: timestamps.playbackInterruptedAt,
+        durationMs: diffMs(timestamps.playbackStartedAt, timestamps.playbackInterruptedAt),
+      };
+    case 'listening_restarted':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status: timestamps.listeningRestartedAt === null ? activeStatus : 'completed',
+        startAt: timestamps.listeningRestartedAt,
+        endAt: timestamps.listeningRestartedAt,
+        durationMs: null,
+      };
+    case 'listening':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status: resolveListeningTimelineStatus(pipeline, activeStage),
+        startAt: timestamps.listeningStartedAt,
+        endAt: timestamps.silenceDetectedAt ?? pipeline.latency.timestamps.stopListeningAt,
+        durationMs: durations.listeningDurationMs,
+      };
+    case 'silence_detected':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status: timestamps.silenceDetectedAt === null ? activeStatus : 'completed',
+        startAt: timestamps.silenceDetectedAt,
+        endAt: timestamps.silenceDetectedAt,
+        durationMs: null,
+      };
+    case 'stt':
+      return buildPipelineStageTimeline(
+        key,
+        pipeline.stt,
+        timestamps.sttStartedAt,
+        timestamps.sttFinishedAt,
+        durations.sttDurationMs,
+        activeStatus,
+      );
+    case 'llm':
+      return buildPipelineStageTimeline(
+        key,
+        pipeline.gateway,
+        timestamps.llmStartedAt,
+        timestamps.llmFinishedAt,
+        durations.llmDurationMs,
+        activeStatus,
+      );
+    case 'tts':
+      return buildPipelineStageTimeline(
+        key,
+        pipeline.tts,
+        timestamps.ttsStartedAt,
+        timestamps.ttsFinishedAt,
+        durations.ttsDurationMs,
+        activeStatus,
+      );
+    case 'playback':
+      return buildPipelineStageTimeline(
+        key,
+        pipeline.playback,
+        timestamps.playbackStartedAt,
+        timestamps.playbackFinishedAt ?? timestamps.playbackInterruptedAt,
+        durations.playbackDurationMs,
+        activeStatus,
+      );
+    case 'idle':
+      return {
+        key,
+        label: TIMELINE_STAGE_LABELS[key],
+        status: currentState === 'idle' ? 'active' : activeStatus,
+        startAt: timestamps.idleStartedAt,
+        endAt: timestamps.idleStartedAt,
+        durationMs: null,
+      };
+  }
+}
+
+function buildPipelineStageTimeline(
+  key: Extract<VoiceTurnTimelineStageKey, 'stt' | 'llm' | 'tts' | 'playback'>,
+  stage: PipelineStageDebug,
+  startAt: string | null,
+  endAt: string | null,
+  durationMs: number | null,
+  activeStatus: VoiceTurnTimelineStageStatus,
+): VoiceTurnTimelineStage {
+  return {
+    key,
+    label: TIMELINE_STAGE_LABELS[key],
+    status: mapTimelineStageStatus(stage.status, activeStatus),
+    startAt,
+    endAt,
+    durationMs,
+  };
+}
+
+function mapTimelineStageStatus(
+  status: PipelineStageStatus,
+  activeStatus: VoiceTurnTimelineStageStatus,
+): VoiceTurnTimelineStageStatus {
+  switch (status) {
+    case 'running':
+      return 'active';
+    case 'succeeded':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    case 'interrupted':
+      return 'interrupted';
+    case 'idle':
+    default:
+      return activeStatus;
+  }
+}
+
+function resolveListeningTimelineStatus(
+  pipeline: VoicePipelineDebugInfo,
+  activeStage: VoiceTurnTimelineStageKey | null,
+): VoiceTurnTimelineStageStatus {
+  if (pipeline.recording.status === 'failed') {
+    return 'failed';
+  }
+
+  if (activeStage === 'listening') {
+    return 'active';
+  }
+
+  if (
+    pipeline.latency.timestamps.silenceDetectedAt !== null ||
+    pipeline.latency.timestamps.stopListeningAt !== null ||
+    pipeline.stt.status !== 'idle' ||
+    pipeline.gateway.status !== 'idle' ||
+    pipeline.tts.status !== 'idle' ||
+    pipeline.playback.status !== 'idle'
+  ) {
+    return 'completed';
+  }
+
+  return pipeline.latency.timestamps.micStartAt === null ? 'pending' : 'active';
+}
+
+function resolveTimelineActiveStage(
+  pipeline: VoicePipelineDebugInfo,
+  currentState: SonnyRuntimeState,
+): VoiceTurnTimelineStageKey | null {
+  if (pipeline.playback.status === 'interrupted') {
+    return currentState === 'listening' ? 'listening' : 'playback_interrupted';
+  }
+
+  if (currentState === 'speaking' || pipeline.playback.status === 'running') {
+    return 'playback';
+  }
+
+  if (currentState === 'thinking' && pipeline.tts.status === 'running') {
+    return 'tts';
+  }
+
+  if (currentState === 'thinking' || pipeline.gateway.status === 'running') {
+    return pipeline.tts.status === 'running' ? 'tts' : 'llm';
+  }
+
+  if (currentState === 'transcribing' || pipeline.stt.status === 'running') {
+    return 'stt';
+  }
+
+  if (currentState === 'listening' || pipeline.recording.status === 'running') {
+    return 'listening';
+  }
+
+  if (currentState === 'idle') {
+    return 'idle';
+  }
+
+  return null;
+}
+
+function resolveStageResolvedAt(stage: PipelineStageDebug): string | null {
+  if (
+    stage.status === 'succeeded' ||
+    stage.status === 'failed' ||
+    stage.status === 'interrupted'
+  ) {
+    return stage.updatedAt;
+  }
+
+  return null;
 }
 
 function diffMs(start: string | null, end: string | null): number | null {
@@ -2039,6 +3053,13 @@ function toErrorMessage(error: unknown): string {
 }
 
 function classifyRecordingStartError(error: unknown): string {
+  if (error instanceof MicrophoneCaptureError) {
+    return (
+      error.diagnostics.likelyFailureCause ??
+      `Microphone capture failed: ${error.message}`
+    );
+  }
+
   if (error instanceof ManualRecorderError) {
     const stderrSuffix =
       error.diagnostics.lastStderr === null
@@ -2071,6 +3092,14 @@ function classifyRecordingStartError(error: unknown): string {
 }
 
 function classifyRecordingStopError(message: string): string {
+  if (message.includes('aborted')) {
+    return 'Microphone capture was aborted before a usable turn completed.';
+  }
+
+  if (message.includes('No usable microphone input detected')) {
+    return 'No usable microphone input detected. Check macOS microphone permissions and default input device.';
+  }
+
   if (message.includes('No audio data')) {
     return 'Recording completed but captured no audio.';
   }
@@ -2084,6 +3113,75 @@ function classifyRecordingStopError(message: string): string {
   }
 
   return `Recording failed: ${message}`;
+}
+
+function enrichRecorderDebugWithAudioMetrics(
+  recorder: RecorderRuntimeDebugInfo,
+  analyzed: ReturnType<typeof analyzeAudioBuffer>,
+  bytesCaptured: number,
+): RecorderRuntimeDebugInfo {
+  return {
+    ...recorder,
+    bytesCaptured,
+    peakAmplitude: analyzed.peakAmplitude,
+    rmsLevel: analyzed.rmsLevel,
+    silentRatio: analyzed.silentRatio,
+    inputAppearsSilent: analyzed.suspectedSilent,
+    audioQualityHint: analyzed.audioQualityHint,
+  };
+}
+
+function inferRecorderFailureCause(
+  recorder: RecorderRuntimeDebugInfo,
+): string | null {
+  const bytesCaptured = recorder.bytesCaptured ?? null;
+
+  if (recorder.captureAborted) {
+    return 'Capture was aborted before a usable microphone turn completed.';
+  }
+
+  if (recorder.lastFailureReason === 'permission_denied_suspected') {
+    return 'macOS likely blocked microphone access. Check System Settings > Privacy & Security > Microphone.';
+  }
+
+  if (recorder.lastFailureReason === 'backend_missing') {
+    return `Recorder backend "${recorder.backend}" is not available on PATH.`;
+  }
+
+  if (recorder.lastFailureReason === 'spawn_failed') {
+    return 'Recorder process failed to start. Check local recorder availability and microphone access.';
+  }
+
+  if (recorder.inputAppearsSilent === true) {
+    if (
+      recorder.defaultInputDeviceName !== null &&
+      recorder.device !== null &&
+      recorder.device !== recorder.defaultInputDeviceName
+    ) {
+      return `Captured audio is silent and Sonny is using "${recorder.device}" while macOS defaults to "${recorder.defaultInputDeviceName}". Check the default input device.`;
+    }
+
+    if (recorder.usingDefaultDevice) {
+      return 'Captured audio is mostly silence on the current default input device. Check macOS microphone permissions and Sound > Input.';
+    }
+
+    return 'Captured audio is mostly silence. Check the selected input device and microphone level.';
+  }
+
+  if (
+    bytesCaptured !== null &&
+    bytesCaptured > 0 &&
+    recorder.firstChunkReceived &&
+    recorder.audioQualityHint === 'too_short'
+  ) {
+    return 'Recorder captured only a very short turn. Speak for slightly longer before pausing.';
+  }
+
+  if (bytesCaptured === 0 && recorder.spawnStarted) {
+    return 'Recorder spawned but no usable audio bytes were captured.';
+  }
+
+  return recorder.lastCaptureError ?? null;
 }
 
 function classifySttError(message: string): string {
@@ -2115,6 +3213,10 @@ function classifySttError(message: string): string {
   }
 
   return `STT failed: ${message}`;
+}
+
+function isSttEmptyTranscriptError(message: string): boolean {
+  return message.startsWith('stt_empty_transcript:');
 }
 
 function classifyGatewayError(message: string): string {

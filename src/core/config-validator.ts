@@ -78,6 +78,39 @@ export function validateConfig(value: unknown): RuntimeConfig {
     skills: {
       permissions: readSkillPermissions(skills, issues),
     },
+    sttProvider:
+      readOptionalString(root, 'config.sttProvider', issues, 'sttProvider') ??
+      'faster-whisper',
+    foregroundLlmProvider:
+      readOptionalString(
+        root,
+        'config.foregroundLlmProvider',
+        issues,
+        'foregroundLlmProvider',
+      ) ?? 'ollama-foreground',
+    backgroundLlmProvider:
+      readOptionalString(
+        root,
+        'config.backgroundLlmProvider',
+        issues,
+        'backgroundLlmProvider',
+      ) ?? 'ollama-background',
+    ttsProvider:
+      readOptionalString(root, 'config.ttsProvider', issues, 'ttsProvider') ??
+      'qwen3-tts',
+    playbackProvider:
+      readOptionalString(
+        root,
+        'config.playbackProvider',
+        issues,
+        'playbackProvider',
+      ) ?? 'system-player',
+    foregroundModel:
+      readOptionalString(root, 'config.foregroundModel', issues, 'foregroundModel') ??
+      readString(ollama, 'config.ollama.model', issues, 'model'),
+    backgroundModel:
+      readOptionalString(root, 'config.backgroundModel', issues, 'backgroundModel') ??
+      readString(ollama, 'config.ollama.model', issues, 'model'),
   };
 
   if (issues.length > 0) {
