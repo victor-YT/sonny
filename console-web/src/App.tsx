@@ -484,8 +484,8 @@ function App() {
     : controlState.snapshot?.lastResponseText
       ? 'Final response only'
       : 'Waiting for response'
-  const micLevel = controlState.snapshot?.micLevel ?? null
   const micActive = controlState.snapshot?.micActive === true
+  const browserMic = useBrowserMicLevel(micActive)
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -561,7 +561,12 @@ function App() {
                       </>
                     )}
                   </Button>
-                  <MicLevelMeter active={micActive} level={micLevel} />
+                  <MicLevelMeter
+                    active={micActive}
+                    backendLevel={controlState.snapshot?.micLevel ?? null}
+                    browserLevel={browserMic.level}
+                    browserStatus={browserMic.status}
+                  />
                 </div>
 
                 <div className="grid w-full gap-6 md:grid-cols-2">
@@ -1090,15 +1095,30 @@ function StatusRow({ label, value }: { label: string; value: string }) {
 
 function MicLevelMeter({
   active,
-  level,
+  backendLevel,
+  browserLevel,
+  browserStatus,
 }: {
   active: boolean
-  level: number | null
+  backendLevel: number | null
+  browserLevel: number | null
+  browserStatus: BrowserMicLevelStatus
 }) {
-  const normalizedLevel = Math.max(0, Math.min(1, level ?? 0))
+  const levels = [backendLevel, browserLevel].filter(
+    (value): value is number => value !== null,
+  )
+  const normalizedLevel = Math.max(0, Math.min(1, Math.max(0, ...levels)))
   const displayLevel = Math.max(0.03, Math.min(1, normalizedLevel / 0.12))
-  const levelText =
-    level === null ? 'RMS --' : `RMS ${normalizedLevel.toFixed(4)}`
+  const sources = [
+    backendLevel !== null ? 'backend' : null,
+    browserLevel !== null ? 'browser' : null,
+  ].filter((value): value is string => value !== null)
+  const levelText = formatMicLevelText(
+    active,
+    normalizedLevel,
+    sources,
+    browserStatus,
+  )
 
   return (
     <div
@@ -1123,6 +1143,161 @@ function MicLevelMeter({
       </div>
     </div>
   )
+}
+
+type BrowserMicLevelStatus =
+  | 'idle'
+  | 'requesting'
+  | 'active'
+  | 'unavailable'
+  | 'blocked'
+
+function useBrowserMicLevel(active: boolean): {
+  level: number | null
+  status: BrowserMicLevelStatus
+} {
+  const [state, setState] = useState<{
+    level: number | null
+    status: BrowserMicLevelStatus
+  }>({
+    level: null,
+    status: 'idle',
+  })
+
+  useEffect(() => {
+    if (!active) {
+      setState({ level: null, status: 'idle' })
+      return
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setState({ level: null, status: 'unavailable' })
+      return
+    }
+
+    let cancelled = false
+    let animationFrame: number | null = null
+    let stream: MediaStream | null = null
+    let audioContext: AudioContext | null = null
+    let lastPublishedAt = 0
+
+    async function startBrowserMeter() {
+      setState({ level: null, status: 'requesting' })
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        })
+
+        if (cancelled) {
+          stopMediaStream(stream)
+          return
+        }
+
+        audioContext = new AudioContext()
+        const source = audioContext.createMediaStreamSource(stream)
+        const analyser = audioContext.createAnalyser()
+
+        analyser.fftSize = 1024
+        const samples = new Float32Array(analyser.fftSize)
+        source.connect(analyser)
+
+        const tick = (timestamp: number) => {
+          if (cancelled) {
+            return
+          }
+
+          if (timestamp - lastPublishedAt >= 100) {
+            analyser.getFloatTimeDomainData(samples)
+            setState({
+              level: calculateBrowserRms(samples),
+              status: 'active',
+            })
+            lastPublishedAt = timestamp
+          }
+
+          animationFrame = window.requestAnimationFrame(tick)
+        }
+
+        animationFrame = window.requestAnimationFrame(tick)
+      } catch {
+        if (!cancelled) {
+          setState({ level: null, status: 'blocked' })
+        }
+      }
+    }
+
+    void startBrowserMeter()
+
+    return () => {
+      cancelled = true
+
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame)
+      }
+
+      if (stream !== null) {
+        stopMediaStream(stream)
+      }
+
+      void audioContext?.close()
+    }
+  }, [active])
+
+  return state
+}
+
+function stopMediaStream(stream: MediaStream): void {
+  for (const track of stream.getTracks()) {
+    track.stop()
+  }
+}
+
+function calculateBrowserRms(samples: Float32Array): number {
+  if (samples.length === 0) {
+    return 0
+  }
+
+  let sumSquares = 0
+
+  for (const sample of samples) {
+    sumSquares += sample * sample
+  }
+
+  return Number(Math.sqrt(sumSquares / samples.length).toFixed(4))
+}
+
+function formatMicLevelText(
+  active: boolean,
+  level: number,
+  sources: string[],
+  browserStatus: BrowserMicLevelStatus,
+): string {
+  if (!active) {
+    return 'RMS --'
+  }
+
+  if (sources.length > 0) {
+    return `RMS ${level.toFixed(4)} · ${sources.join('+')}`
+  }
+
+  if (browserStatus === 'requesting') {
+    return 'Requesting mic'
+  }
+
+  if (browserStatus === 'blocked') {
+    return 'Browser mic blocked'
+  }
+
+  if (browserStatus === 'unavailable') {
+    return 'Browser mic unavailable'
+  }
+
+  return 'RMS --'
 }
 
 function VerdictItem({ label, value }: { label: string; value: boolean }) {
