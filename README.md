@@ -81,6 +81,8 @@ The main pieces are:
 - `src/skills/`: built-in tool skills, permissions, monitor registry, web monitor
 - `src/ui/`: tray host, Electron entrypoint, localhost control center
 
+The maintained voice-runtime map is in [`docs/voice-runtime.md`](docs/voice-runtime.md). Update it with any voice pipeline, provider, or runtime state changes.
+
 ## Setup Guide
 
 ### Prerequisites

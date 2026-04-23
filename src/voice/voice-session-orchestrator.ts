@@ -266,7 +266,7 @@ export interface VoicePipelineDebugInfo {
   updatedAt: string | null;
 }
 
-export interface RecorderRuntimeDebugInfo extends RecorderDebugInfo {}
+export type RecorderRuntimeDebugInfo = RecorderDebugInfo;
 
 export interface RetranscribeLastAudioResult {
   transcript: string;

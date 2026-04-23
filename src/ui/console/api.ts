@@ -509,6 +509,7 @@ export function createConsoleApiRuntime(
     response,
     _next,
   ) => {
+    void _next;
     const message = error instanceof Error ? error.message : 'Unknown error';
     response.status(400).json({
       error: message,

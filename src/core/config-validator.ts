@@ -243,35 +243,6 @@ function readOptionalUrl(
   return value;
 }
 
-function readStringArray(
-  root: Record<string, unknown> | undefined,
-  path: string,
-  issues: string[],
-  ...segments: string[]
-): string[] {
-  const value = readNestedValue(root, path, issues, ...segments);
-
-  if (!Array.isArray(value)) {
-    issues.push(`${path} must be an array of non-empty strings.`);
-    return [];
-  }
-
-  const normalizedValues = value.flatMap((entry) => {
-    if (typeof entry !== 'string' || entry.trim().length === 0) {
-      issues.push(`${path} must contain only non-empty strings.`);
-      return [];
-    }
-
-    return [entry.trim()];
-  });
-
-  if (normalizedValues.length === 0) {
-    issues.push(`${path} must contain at least one wake word.`);
-  }
-
-  return normalizedValues;
-}
-
 function readOptionalStringArray(
   root: Record<string, unknown> | undefined,
   path: string,

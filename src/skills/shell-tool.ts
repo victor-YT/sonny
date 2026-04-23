@@ -271,7 +271,9 @@ export class ShellToolSkill {
       });
       let stdout = '';
       let stderr = '';
-      let timeoutHandle: NodeJS.Timeout | undefined;
+      const timeoutHandle = setTimeout(() => {
+        child.kill('SIGTERM');
+      }, timeoutMs);
 
       child.stdout.on('data', (chunk: Buffer | string) => {
         stdout += chunk.toString();
@@ -298,10 +300,6 @@ export class ShellToolSkill {
           stderr,
         });
       });
-
-      timeoutHandle = setTimeout(() => {
-        child.kill('SIGTERM');
-      }, timeoutMs);
     });
   }
 }

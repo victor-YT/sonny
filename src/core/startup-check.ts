@@ -224,31 +224,6 @@ function readOptionalUrl(
   return undefined;
 }
 
-function readRequiredBoolean(
-  environment: NodeJS.ProcessEnv,
-  key: string,
-  issues: string[],
-): boolean {
-  const rawValue = environment[key]?.trim().toLowerCase();
-
-  if (rawValue === undefined || rawValue.length === 0) {
-    issues.push(`${key} is required and must be set to 0, 1, false, or true.`);
-    return false;
-  }
-
-  if (['1', 'true', 'yes', 'on'].includes(rawValue)) {
-    return true;
-  }
-
-  if (['0', 'false', 'no', 'off'].includes(rawValue)) {
-    return false;
-  }
-
-  issues.push(`${key} must be set to 0, 1, false, or true.`);
-
-  return false;
-}
-
 function readOptionalBoolean(
   environment: NodeJS.ProcessEnv,
   key: string,

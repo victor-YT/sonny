@@ -1,6 +1,5 @@
 import type {
   SttDebugInfo,
-  SttFailureReason,
   SttOptions,
   SttProvider,
   SttResult,
@@ -145,7 +144,6 @@ export class FasterWhisperProvider implements SttProvider {
       };
 
       if (this.shouldLogDiagnostics()) {
-        // eslint-disable-next-line no-console
         console.warn(
           `[stt] audio stream closed before any non-empty chunk was produced; skipping ${requestUrl}`,
         );
@@ -210,7 +208,6 @@ export class FasterWhisperProvider implements SttProvider {
       liveMicDebug.sttRequestSkippedBecauseEmpty = false;
       this.logStreamingFetchStarted(requestUrl, liveMicDebug);
     } else if (this.shouldLogDiagnostics()) {
-      // eslint-disable-next-line no-console
       console.log(
         `[stt] streaming request to ${requestUrl} starting (${metrics.totalBytesSent} bytes enqueued across ${metrics.nonEmptyChunkCount} chunk(s))`,
       );
@@ -319,7 +316,6 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     if (this.shouldLogDiagnostics()) {
-      // eslint-disable-next-line no-console
       console.log(
         `[stt] streaming request to ${requestUrl} complete: ` +
           `${metrics.totalBytesSent} bytes across ${metrics.nonEmptyChunkCount} chunk(s)`,
@@ -658,7 +654,6 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     if (shouldLogEnqueue) {
-      // eslint-disable-next-line no-console
       console.log(
         '[stt] enqueue chunk',
         JSON.stringify({
@@ -709,7 +704,6 @@ export class FasterWhisperProvider implements SttProvider {
     metrics: StreamSendMetrics,
     reason: unknown,
   ): void {
-    // eslint-disable-next-line no-console
     console.warn(
       '[stt] request body canceled',
       JSON.stringify({
@@ -727,7 +721,6 @@ export class FasterWhisperProvider implements SttProvider {
     elapsedMs: number,
     metrics: StreamSendMetrics,
   ): void {
-    // eslint-disable-next-line no-console
     console.log(
       '[stt] response headers received',
       JSON.stringify({
@@ -746,7 +739,6 @@ export class FasterWhisperProvider implements SttProvider {
     requestUrl: string,
     debug: NonNullable<SttOptions['streamingDebug']>,
   ): void {
-    // eslint-disable-next-line no-console
     console.log(
       '[stt] streaming fetch started',
       JSON.stringify({
@@ -765,7 +757,6 @@ export class FasterWhisperProvider implements SttProvider {
     debug: NonNullable<SttOptions['streamingDebug']>,
     reason: string,
   ): void {
-    // eslint-disable-next-line no-console
     console.warn(
       '[stt] streaming fetch skipped',
       JSON.stringify({

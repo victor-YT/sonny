@@ -8,6 +8,7 @@ release/
 !.env.example
 *.log
 tmp/
+dev/
 src/ui/console/public/
 .DS_Store
 __pycache__/

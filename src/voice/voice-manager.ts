@@ -173,7 +173,9 @@ export class VoiceManager {
     this.playbackQueue.onEvent((event) => {
       this.handlePlaybackQueueEvent(event);
     });
-    this.speakerListener && this.speaker?.onEvent(this.speakerListener);
+    if (this.speakerListener !== undefined) {
+      this.speaker?.onEvent(this.speakerListener);
+    }
   }
 
   private resolveRuntimeConfig(config: VoiceManagerConfig): RuntimeConfig | undefined {
@@ -704,11 +706,37 @@ export class VoiceManager {
     this.setState('thinking');
     const retryState = this.createTtsRetryState();
     const sentenceAudioTasks: Array<Promise<Buffer>> = [];
+    let speechChain: Promise<void> = Promise.resolve();
+    let speechFailure: Error | undefined;
     const responseChunks: string[] = [];
     let bufferedText = '';
     let partialResponse = '';
     let firstTokenEmitted = false;
     let firstSentenceReadyEmitted = false;
+    const scheduleSpeechSegment = (sentence: string): void => {
+      const sentenceAudioTask = speechChain.then(async () => {
+        if (speechFailure !== undefined) {
+          throw speechFailure;
+        }
+
+        this.throwIfInterrupted(signal);
+        this.setState('synthesizing');
+
+        try {
+          return await this.speakStreamingSentence(sentence, ttsOptions, signal, retryState);
+        } catch (error: unknown) {
+          speechFailure = this.toError(error, 'TTS speech segment failed');
+          throw speechFailure;
+        }
+      });
+
+      sentenceAudioTask.catch(() => undefined);
+      sentenceAudioTasks.push(sentenceAudioTask);
+      speechChain = sentenceAudioTask.then(
+        () => undefined,
+        () => undefined,
+      );
+    };
 
     for await (const chunk of this.gateway.streamChat(userMessage, {
       signal,
@@ -750,10 +778,7 @@ export class VoiceManager {
             text: sentence,
           });
         }
-        this.setState('synthesizing');
-        sentenceAudioTasks.push(
-          this.speakStreamingSentence(sentence, ttsOptions, signal, retryState),
-        );
+        scheduleSpeechSegment(sentence);
       }
     }
 
@@ -768,10 +793,7 @@ export class VoiceManager {
           text: trailingSentence,
         });
       }
-      this.setState('synthesizing');
-      sentenceAudioTasks.push(
-        this.speakStreamingSentence(trailingSentence, ttsOptions, signal, retryState),
-      );
+      scheduleSpeechSegment(trailingSentence);
     }
 
     const response = responseChunks.join('');

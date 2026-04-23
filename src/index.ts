@@ -89,6 +89,13 @@ function createMonitoringRuntime(
     monitorRegistry,
     proactiveAgent,
   });
+  proactiveAgent.onNotification(async (notification) => {
+    await notificationManager.notify({
+      title: notification.title,
+      message: notification.body,
+      voiceText: `${notification.title}. ${notification.body}`,
+    });
+  });
   const scheduler = new MonitorScheduler({
     monitorRegistry,
     webMonitor,
@@ -130,7 +137,6 @@ async function initializeMonitoringRuntime(runtime: {
 
 async function runVoice(
   voiceGateway: VoiceGateway,
-  gateway: Gateway,
 ): Promise<void> {
   voiceGateway.manager.onEvent((event) => {
     if (event.type === 'state_changed' && event.state !== undefined) {
@@ -258,7 +264,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      await runVoice(voiceGateway, gateway);
+      await runVoice(voiceGateway);
     } finally {
       monitoringRuntime.scheduler.stop();
       await monitoringRuntime.proactiveAgent.stop();
