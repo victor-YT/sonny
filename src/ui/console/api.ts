@@ -769,6 +769,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
     lastResponseText: null,
     currentSessionId: null,
     micActive: false,
+    micLevel: null,
     playbackActive: false,
     services: {
       ollama: {

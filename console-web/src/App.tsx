@@ -484,6 +484,8 @@ function App() {
     : controlState.snapshot?.lastResponseText
       ? 'Final response only'
       : 'Waiting for response'
+  const micLevel = controlState.snapshot?.micLevel ?? null
+  const micActive = controlState.snapshot?.micActive === true
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -534,32 +536,33 @@ function App() {
                   </p>
                 </div>
 
-                <Button
-                  size="lg"
-                  className="h-14 min-w-72 px-8 text-base"
-                  variant={
-                    controlState.snapshot?.micActive === true ? 'outline' : 'default'
-                  }
-                  onClick={() =>
-                    void handlePost(
-                      controlState.snapshot?.micActive === true
-                        ? '/api/voice/listen/stop'
-                        : '/api/voice/listen/start',
-                    )
-                  }
-                >
-                  {controlState.snapshot?.micActive === true ? (
-                    <>
-                      <Square />
-                      Stop Listening
-                    </>
-                  ) : (
-                    <>
-                      <Mic />
-                      Start Listening
-                    </>
-                  )}
-                </Button>
+                <div className="flex w-full flex-col items-center justify-center gap-4 sm:flex-row">
+                  <Button
+                    size="lg"
+                    className="h-14 min-w-72 px-8 text-base"
+                    variant={micActive ? 'outline' : 'default'}
+                    onClick={() =>
+                      void handlePost(
+                        micActive
+                          ? '/api/voice/listen/stop'
+                          : '/api/voice/listen/start',
+                      )
+                    }
+                  >
+                    {micActive ? (
+                      <>
+                        <Square />
+                        Stop Listening
+                      </>
+                    ) : (
+                      <>
+                        <Mic />
+                        Start Listening
+                      </>
+                    )}
+                  </Button>
+                  <MicLevelMeter active={micActive} level={micLevel} />
+                </div>
 
                 <div className="grid w-full gap-6 md:grid-cols-2">
                   <ConversationPreviewCard
@@ -601,7 +604,7 @@ function App() {
                 <div className="grid gap-3">
                   <StatusRow
                     label="Mic"
-                    value={controlState.snapshot?.micActive ? 'Active' : 'Idle'}
+                    value={micActive ? 'Active' : 'Idle'}
                   />
                   <StatusRow
                     label="Playback"
@@ -1081,6 +1084,43 @@ function StatusRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-4 py-1">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className="text-sm font-medium">{value}</span>
+    </div>
+  )
+}
+
+function MicLevelMeter({
+  active,
+  level,
+}: {
+  active: boolean
+  level: number | null
+}) {
+  const normalizedLevel = Math.max(0, Math.min(1, level ?? 0))
+  const displayLevel = Math.max(0.03, Math.min(1, normalizedLevel / 0.12))
+  const levelText =
+    level === null ? 'RMS --' : `RMS ${normalizedLevel.toFixed(4)}`
+
+  return (
+    <div
+      className={cn(
+        'flex h-14 w-full max-w-72 items-center gap-3 rounded-lg border px-4',
+        active ? 'border-primary/35 bg-background' : 'border-muted bg-muted/30 opacity-60',
+      )}
+      aria-label="Microphone level"
+    >
+      <AudioLines className="size-5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1 space-y-1 text-left">
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn(
+              'h-full rounded-full transition-[width,background-color] duration-100',
+              active ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+            )}
+            style={{ width: active ? `${displayLevel * 100}%` : '3%' }}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">{levelText}</p>
+      </div>
     </div>
   )
 }

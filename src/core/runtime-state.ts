@@ -55,6 +55,7 @@ export interface RuntimeStateSnapshot {
   lastResponseText: string | null;
   currentSessionId: string | null;
   micActive: boolean;
+  micLevel: number | null;
   playbackActive: boolean;
   services: Record<RuntimeServiceName, RuntimeServiceHealth>;
 }
@@ -115,6 +116,7 @@ export class RuntimeStateStore {
       lastResponseText: null,
       currentSessionId: config.currentSessionId ?? null,
       micActive: false,
+      micLevel: null,
       playbackActive: false,
       services: {
         ollama: this.createService('ollama', config),
@@ -186,12 +188,29 @@ export class RuntimeStateStore {
   }
 
   public setMicActive(active: boolean): void {
-    if (this.snapshot.micActive === active) {
+    if (
+      this.snapshot.micActive === active &&
+      (active || this.snapshot.micLevel === null)
+    ) {
       return;
     }
 
     this.patchSnapshot({
       micActive: active,
+      micLevel: active ? this.snapshot.micLevel : null,
+    });
+  }
+
+  public setMicLevel(level: number | null): void {
+    const normalized =
+      level === null ? null : Math.max(0, Math.min(1, Number(level.toFixed(4))));
+
+    if (this.snapshot.micLevel === normalized) {
+      return;
+    }
+
+    this.patchSnapshot({
+      micLevel: normalized,
     });
   }
 
@@ -428,6 +447,7 @@ export class RuntimeStateStore {
       lastError: null,
       userPartialTranscript: null,
       micActive: false,
+      micLevel: null,
       assistantPartialResponse: null,
       playbackActive: false,
     });

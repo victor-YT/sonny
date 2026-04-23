@@ -522,6 +522,7 @@ export class VoiceSessionOrchestrator {
     await this.voiceGateway.manager.interruptCurrentInteraction();
     this.runtimeState.setCurrentSessionId(this.gateway.currentSession.id);
     this.runtimeState.setMicActive(true);
+    this.runtimeState.setMicLevel(0);
     this.runtimeState.setPlaybackActive(false);
     this.runtimeState.setUserPartialTranscript(null);
     this.runtimeState.setAssistantPartialResponse(null);
@@ -563,6 +564,9 @@ export class VoiceSessionOrchestrator {
       signal: abortController.signal,
       onSilenceDetected: () => {
         this.handleSilenceDetected();
+      },
+      onAudioLevel: (event) => {
+        this.runtimeState.setMicLevel(event.rmsLevel);
       },
     });
 

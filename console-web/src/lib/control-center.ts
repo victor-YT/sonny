@@ -18,6 +18,7 @@ export interface RuntimeSnapshot {
   assistantPartialResponse: string | null
   lastResponseText: string | null
   services: Record<string, RuntimeServiceState>
+  micLevel: number | null
 }
 
 export interface RuntimeLogEntry {

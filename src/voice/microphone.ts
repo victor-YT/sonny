@@ -25,6 +25,13 @@ export const MANUAL_CAPTURE_STOP_REASON = 'manual_capture_stop';
 export interface MicrophoneCaptureOptions {
   signal?: AbortSignal;
   onSilenceDetected?: () => void;
+  onAudioLevel?: (event: MicrophoneAudioLevelEvent) => void;
+}
+
+export interface MicrophoneAudioLevelEvent {
+  rmsLevel: number;
+  speechStarted: boolean;
+  silenceDetected: boolean;
 }
 
 export interface MicrophoneConfig {
@@ -738,6 +745,11 @@ export class Microphone {
           rmsSamples += 1;
           maxChunkRmsLevel = Math.max(maxChunkRmsLevel, rmsLevel);
           vadRequestCount += 1;
+          options.onAudioLevel?.({
+            rmsLevel,
+            speechStarted,
+            silenceDetected,
+          });
 
           const response = await fetch(vadUrl, {
             method: 'POST',

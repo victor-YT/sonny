@@ -15,6 +15,7 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
 
   runtimeState.transition('listening');
   runtimeState.setMicActive(true);
+  runtimeState.setMicLevel(0.12345);
   runtimeState.setUserPartialTranscript('hello');
   runtimeState.setLastTranscript('hello sonny');
   runtimeState.transition('thinking');
@@ -31,6 +32,7 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
 
   assert.equal(snapshot.currentState, 'thinking');
   assert.equal(snapshot.micActive, true);
+  assert.equal(snapshot.micLevel, 0.1235);
   assert.equal(snapshot.playbackActive, true);
   assert.equal(snapshot.userPartialTranscript, null);
   assert.equal(snapshot.lastTranscript, 'hello sonny');
@@ -42,4 +44,7 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
   assert.equal(conversation[0]?.userTranscript, 'hello sonny');
   assert.equal(conversation[0]?.assistantText, 'pipeline nominal');
   assert.ok(logs.some((entry) => entry.type === 'state_changed'));
+
+  runtimeState.setMicActive(false);
+  assert.equal(runtimeState.getSnapshot().micLevel, null);
 });
