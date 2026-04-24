@@ -3,15 +3,10 @@ import {
   Activity,
   AlertTriangle,
   AudioLines,
-  Bot,
   CircleDot,
   LoaderCircle,
   Mic,
-  RefreshCcw,
-  RotateCcw,
   Square,
-  Volume2,
-  Waves,
 } from 'lucide-react'
 
 import {
@@ -28,15 +23,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
@@ -170,12 +157,6 @@ function App() {
     level: 'info',
     message: 'Runtime stream connected. Waiting for the latest snapshot.',
   })
-  const [ttsInput, setTtsInput] = useState(
-    'Sonny runtime online. Voice pipeline standing by.',
-  )
-  const [selectedVoice, setSelectedVoice] = useState('')
-  const [sampleAudioPath, setSampleAudioPath] = useState('')
-  const [sampleTurnRunning, setSampleTurnRunning] = useState(false)
   const [developerToolsOpen, setDeveloperToolsOpen] = useState(false)
 
   useEffect(() => {
@@ -207,7 +188,6 @@ function App() {
           pipeline: debugState.pipeline,
           recorder: debugState.recorder,
         })
-        setSelectedVoice(voiceSettings.settings.voiceModel)
         setConnection('connected')
       } catch (error) {
         if (cancelled) {
@@ -320,7 +300,6 @@ function App() {
     return controlState.snapshot ? normalizeStateClass(controlState.snapshot) : 'idle'
   }, [controlState.snapshot])
 
-  const voiceModel = controlState.voiceSettings?.settings.voiceModel ?? selectedVoice
   const services = useMemo(() => {
     if (controlState.snapshot === null) {
       return []
@@ -350,10 +329,6 @@ function App() {
   const sessionText = controlState.snapshot?.currentSessionId
     ? `Session ${controlState.snapshot.currentSessionId}`
     : 'Session none'
-
-  const canReplayAudio = controlState.lastAudio?.exists === true
-  const canReplayTts =
-    ((controlState.snapshot?.lastResponseText ?? '').trim().length > 0) || canReplayAudio
 
   async function refreshAll() {
     const [snapshot, logs, conversation, debugState] = await Promise.all([
@@ -401,80 +376,6 @@ function App() {
     }
   }
 
-  async function handleReplayLastRecording() {
-    if (!canReplayAudio) {
-      setNotice({
-        level: 'error',
-        message: 'No saved manual recording is available to replay.',
-      })
-      return
-    }
-
-    try {
-      const audio = new Audio(`/api/runtime/debug/last-audio/file?ts=${Date.now()}`)
-      await audio.play()
-      setNotice({
-        level: 'info',
-        message: 'Playing the latest saved recording.',
-      })
-    } catch (error) {
-      setNotice({
-        level: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  async function handleRetranscribeLastAudio() {
-    try {
-      const response = await fetch('/api/runtime/debug/retranscribe-last-audio', {
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        throw await toRequestError(response)
-      }
-
-      const payload = (await response.json()) as {
-        result?: { transcript?: string | null; transcriptLength?: number | null }
-      }
-
-      await refreshAll()
-
-      const preview = payload.result?.transcript
-        ? ` Transcript: ${payload.result.transcript.slice(0, 120)}`
-        : ''
-
-      setNotice({
-        level: 'info',
-        message: `Re-ran STT on the latest recording. Transcript length: ${String(
-          payload.result?.transcriptLength ?? 'Unknown',
-        )}.${preview}`,
-      })
-    } catch (error) {
-      await Promise.allSettled([refreshAll()])
-      setNotice({
-        level: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  async function handleRunSampleVoiceTurn() {
-    try {
-      setSampleTurnRunning(true)
-      await handlePost('/api/runtime/sample-turn', {
-        path: sampleAudioPath.trim().length > 0 ? sampleAudioPath.trim() : undefined,
-      })
-      setNotice({
-        level: 'info',
-        message: 'Sample voice turn started. Watch the transcript, response, and diagnostics update live.',
-      })
-    } finally {
-      setSampleTurnRunning(false)
-    }
-  }
-
   const transcriptNote = controlState.pipeline?.verdict.sttPartials
     ? 'Streaming partials detected'
     : controlState.snapshot?.lastTranscript
@@ -497,12 +398,16 @@ function App() {
             <div className="text-base font-medium">Sonny</div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge
-                variant={connection === 'connected' ? 'secondary' : 'outline'}
+                variant="outline"
+                className={connectionBadgeClassName(connection)}
               >
                 <Activity />
                 {connection === 'connected' ? 'Connected' : 'Disconnected'}
               </Badge>
-              <Badge variant={runtimeBadgeVariant(runtimeClass)}>
+              <Badge
+                variant={runtimeBadgeVariant(runtimeClass)}
+                className={runtimeBadgeClassName(runtimeClass)}
+              >
                 <CircleDot />
                 {formatState(controlState.snapshot?.currentState ?? 'idle')}
               </Badge>
@@ -521,10 +426,10 @@ function App() {
       </div>
 
       <main className="mx-auto flex max-w-7xl flex-col gap-16 px-6 py-10">
-        <section className="grid gap-12 xl:grid-cols-[minmax(0,2.2fr)_320px] xl:items-start">
-          <div className="flex min-h-[72vh] items-center justify-center">
-            <Card className="w-full max-w-4xl border-0 bg-transparent shadow-none">
-              <CardContent className="flex flex-col items-center gap-12 px-0 py-0 text-center">
+        <section className="grid gap-12 xl:grid-cols-[minmax(0,2.2fr)_320px] xl:items-stretch">
+          <div className="flex min-h-[72vh]">
+            <Card className="mx-auto flex min-h-full w-full max-w-4xl bg-transparent shadow-none">
+              <CardContent className="flex min-h-full flex-col items-center justify-center gap-10 p-8 text-center sm:p-10">
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
                     Manual voice interaction
@@ -595,20 +500,13 @@ function App() {
             </Card>
           </div>
 
-          <aside className="space-y-6">
-            <Card>
-              <CardHeader className="p-6">
+          <aside className="h-full">
+            <Card className="h-full">
+              <CardHeader className="p-5 pb-1">
                 <CardTitle>Runtime</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-5 p-6 pt-0">
-                <div className="space-y-3">
-                  <Badge variant={runtimeBadgeVariant(runtimeClass)}>
-                    <CircleDot />
-                    {formatState(controlState.snapshot?.currentState ?? 'idle')}
-                  </Badge>
-                </div>
-
-                <div className="grid gap-3">
+              <CardContent className="space-y-4 p-5 pt-0">
+                <div className="grid gap-1.5">
                   <StatusRow
                     label="Mic"
                     value={micActive ? 'Active' : 'Idle'}
@@ -627,14 +525,14 @@ function App() {
 
                 <Separator />
 
-                <div className="space-y-3">
+                <div className="space-y-2">
                   <p className="text-sm font-medium">Voice Stack</p>
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {services.length === 0 ? (
                       <EmptyState message="No service health snapshot yet. Refresh health or wait for the runtime to publish one." />
                     ) : (
                       services.map((service) => (
-                        <ServiceHealthRow key={service.label} service={service} />
+                        <ServiceHealthRow key={service.name} service={service} />
                       ))
                     )}
                   </div>
@@ -665,180 +563,6 @@ function App() {
 
           {developerToolsOpen ? (
             <div className="space-y-4">
-              <Card className="bg-muted/20">
-                <CardHeader className="p-4">
-                  <CardTitle className="text-sm">Developer Actions</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 p-4 pt-0">
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">Sample Voice Turn</p>
-                    <Input
-                      value={sampleAudioPath}
-                      onChange={(event) => setSampleAudioPath(event.target.value)}
-                      placeholder="Optional WAV path. Leave empty to use SONNY_SAMPLE_AUDIO_PATH or default sample."
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleRunSampleVoiceTurn()}
-                      disabled={sampleTurnRunning}
-                    >
-                      <Mic />
-                      {sampleTurnRunning ? 'Running Sample Turn...' : 'Run Sample Voice Turn'}
-                    </Button>
-                  </div>
-
-                  <Separator />
-
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
-                    <Input
-                      value={ttsInput}
-                      onChange={(event) => setTtsInput(event.target.value)}
-                      placeholder="Type text for a quick playback check"
-                    />
-                    <Select
-                      value={selectedVoice || voiceModel}
-                      onValueChange={setSelectedVoice}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Voice" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={voiceModel || 'default'}>
-                          {voiceModel || 'default'}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void handlePost('/api/voice/tts/test', {
-                          text: ttsInput,
-                          voice: selectedVoice || voiceModel,
-                        })
-                      }
-                    >
-                      <AudioLines />
-                      Test TTS
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void handlePost('/api/voice/tts/replay')}
-                      disabled={!canReplayTts}
-                    >
-                      <Volume2 />
-                      Replay TTS
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void handleReplayLastRecording()}
-                      disabled={!canReplayAudio}
-                    >
-                      <Waves />
-                      Replay Audio
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void handleRetranscribeLastAudio()}
-                      disabled={!canReplayAudio}
-                    >
-                      <Bot />
-                      Re-run STT
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handlePost('/api/runtime/health/refresh')}
-                    >
-                      <RefreshCcw />
-                      Refresh
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void handlePost('/api/voice/playback/interrupt')
-                      }
-                      disabled={controlState.snapshot?.playbackActive !== true}
-                    >
-                      <Volume2 />
-                      Interrupt
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handlePost('/api/runtime/reset')}
-                    >
-                      <RotateCcw />
-                      Reset
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void handlePost('/api/runtime/logs/clear')}
-                    >
-                      <AlertTriangle />
-                      Clear Logs
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Last Error</p>
-                    <div className="rounded-lg bg-background/60 p-3">
-                      <p className="text-sm whitespace-pre-wrap text-muted-foreground">
-                        {controlState.snapshot?.lastError ??
-                          'No error. Runtime path is clean.'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Pipeline Verdict</p>
-                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                      <VerdictItem
-                        label="STT partials"
-                        value={controlState.pipeline?.verdict.sttPartials ?? false}
-                      />
-                      <VerdictItem
-                        label="Transcript final"
-                        value={controlState.pipeline?.verdict.transcriptFinal ?? false}
-                      />
-                      <VerdictItem
-                        label="LLM streaming"
-                        value={controlState.pipeline?.verdict.llmStreaming ?? false}
-                      />
-                      <VerdictItem
-                        label="TTS streaming"
-                        value={controlState.pipeline?.verdict.ttsStreamingPath ?? false}
-                      />
-                      <VerdictItem
-                        label="Playback started"
-                        value={controlState.pipeline?.verdict.playbackStarted ?? false}
-                      />
-                      <VerdictTextItem
-                        label="Playback mode"
-                        value={controlState.pipeline?.verdict.playbackMode ?? 'unknown'}
-                      />
-                      <VerdictTextItem
-                        label="Player command"
-                        value={controlState.pipeline?.playerCommand ?? 'unknown'}
-                      />
-                      <VerdictItem
-                        label="Full turn success"
-                        value={controlState.pipeline?.verdict.fullTurnSuccess ?? false}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
               <Tabs
                 value={activeTab}
                 onValueChange={(value) => setActiveTab(value as DiagnosticsTab)}
@@ -1067,7 +791,7 @@ function ConversationPreviewCard({
 }) {
   return (
     <div className="rounded-xl bg-muted/40 p-6 text-left">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-4 space-y-1">
         <p className="text-sm font-medium">{title}</p>
         <p className="text-xs text-muted-foreground">{note}</p>
       </div>
@@ -1088,7 +812,7 @@ function EmptyState({ message }: { message: string }) {
 
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-1">
+    <div className="flex items-center justify-between gap-4 py-0.5">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className="text-sm font-medium">{value}</span>
     </div>
@@ -1302,24 +1026,6 @@ function formatMicLevelText(
   return 'RMS --'
 }
 
-function VerdictItem({ label, value }: { label: string; value: boolean }) {
-  return (
-    <div className="rounded-lg bg-background/60 px-3 py-2">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium">{value ? 'yes' : 'no'}</p>
-    </div>
-  )
-}
-
-function VerdictTextItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-background/60 px-3 py-2">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium break-all">{value}</p>
-    </div>
-  )
-}
-
 function ServiceHealthRow({
   service,
 }: {
@@ -1328,31 +1034,60 @@ function ServiceHealthRow({
   return (
     <div
       className={cn(
-        'space-y-1 py-2',
+        'py-1.5',
         shouldDimService(service) && 'opacity-60',
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              'size-2.5 rounded-full',
-              service.online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
-            )}
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium break-all">{service.label}</p>
-            {service.details ? (
-              <p className="text-xs text-muted-foreground break-all">
-                {service.details}
-              </p>
-            ) : null}
-          </div>
+      <div className="flex items-center gap-3">
+        <span
+          className={cn(
+            'size-2.5 shrink-0 rounded-full',
+            service.online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+          )}
+        />
+        <div className="min-w-0">
+          <p className="text-sm font-medium break-all">
+            {formatServiceHealthLabel(service)}
+          </p>
         </div>
-        <span className="text-xs text-muted-foreground">{service.online ? '●' : '○'}</span>
       </div>
     </div>
   )
+}
+
+function formatServiceHealthLabel(
+  service: RuntimeSnapshot['services'][string],
+): string {
+  switch (service.name) {
+    case 'ollama':
+      return `LLM: ${service.label}`
+    case 'stt':
+      return `STT: ${service.label}`
+    case 'tts':
+      return `TTS: ${service.label}`
+    case 'wake_word':
+      return 'Wakeword: coming soon'
+    case 'vad':
+      return 'VAD'
+    default:
+      return service.label
+  }
+}
+
+function connectionBadgeClassName(connection: ConnectionState): string {
+  if (connection === 'connected') {
+    return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/15 dark:text-emerald-300'
+  }
+
+  return 'border-destructive/25 bg-destructive/10 text-destructive dark:border-destructive/35 dark:bg-destructive/20'
+}
+
+function runtimeBadgeClassName(runtimeClass: string): string {
+  if (runtimeClass === 'error') {
+    return 'border-destructive/25 bg-destructive/10 text-destructive dark:border-destructive/35 dark:bg-destructive/20'
+  }
+
+  return ''
 }
 
 function DebugSection({
@@ -1431,7 +1166,7 @@ function PipelineFlow({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
                 <div className="flex-1" />
               )}
             </div>
-            <div className="space-y-1 text-center">
+            <div className="flex min-h-14 flex-col items-center justify-start space-y-1 text-center">
               <p className="text-sm font-medium">{step.label}</p>
               <p className="text-sm text-muted-foreground">
                 {formatOffsetFromStop(
@@ -1515,15 +1250,15 @@ function VoiceTurnTimeline({ pipeline }: { pipeline: PipelineDebugInfo | null })
       </div>
 
       <ScrollArea className="w-full rounded-xl border bg-background/50">
-        <div className="flex min-w-max items-start gap-0 p-4">
+        <div className="flex min-w-max items-stretch gap-0 p-4">
           {timeline.stages.map((stage, index) => (
-            <div key={stage.key} className="flex items-start">
+            <div key={stage.key} className="flex items-stretch">
               <TimelineStageCard
                 stage={stage}
                 isActive={timeline.activeStage === stage.key}
               />
               {index < stageCount - 1 ? (
-                <div className="flex h-[150px] items-center px-2">
+                <div className="flex h-[168px] items-center px-2">
                   <div className="h-px w-8 bg-border" />
                 </div>
               ) : null}
@@ -1589,7 +1324,7 @@ function TimelineStageCard({
   return (
     <div
       className={cn(
-        'w-[190px] shrink-0 rounded-xl border bg-background/80 p-3 text-left transition-colors',
+        'flex h-[168px] w-[190px] shrink-0 flex-col justify-between rounded-xl border bg-background/80 p-3 text-left transition-colors',
         stage.status === 'pending' && 'border-border/70 opacity-65',
         stage.status === 'completed' && 'border-border bg-muted/20',
         stage.status === 'active' && 'border-foreground/50 bg-background shadow-sm ring-2 ring-ring/20',
@@ -1599,8 +1334,8 @@ function TimelineStageCard({
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">{stage.label}</p>
+        <div className="min-h-10 space-y-1">
+          <p className="text-sm font-medium leading-snug">{stage.label}</p>
           <p className="text-xs text-muted-foreground">
             {formatTimelineTime(stage.startAt)}
           </p>
