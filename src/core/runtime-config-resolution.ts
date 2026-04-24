@@ -39,6 +39,11 @@ export function resolveRuntimeConfigFromEnvironment(
           environment.OLMX_MODEL,
           environment.SONNY_FOREGROUND_MODEL,
         ]) ?? baseConfig.olmx.model,
+      apiKey:
+        firstNonEmpty([
+          environment.OLMX_API_KEY,
+          environment.SONNY_OLMX_API_KEY,
+        ]) ?? baseConfig.olmx.apiKey,
     },
     voice: {
       ...baseConfig.voice,

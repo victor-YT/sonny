@@ -78,17 +78,20 @@ export interface OlmxDebugInfo extends LlmProviderDebugInfo {
 export interface OlmxConfig {
   baseUrl?: string;
   model?: string;
+  apiKey?: string;
 }
 
 export class OlmxForegroundProvider implements LlmProvider {
   public readonly name = 'OLMX Foreground LLM';
   private readonly baseUrl: string;
   private readonly model: string;
+  private readonly apiKey: string | undefined;
   private lastDebugInfo: OlmxDebugInfo | null = null;
 
   public constructor(config: OlmxConfig = {}) {
     this.baseUrl = this.normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
     this.model = config.model ?? DEFAULT_MODEL;
+    this.apiKey = config.apiKey?.trim().length === 0 ? undefined : config.apiKey?.trim();
   }
 
   public get currentModel(): string {
@@ -252,11 +255,17 @@ export class OlmxForegroundProvider implements LlmProvider {
     options: LlmGenerateOptions,
     stream: boolean,
   ): Promise<Response> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+
+    if (this.apiKey !== undefined) {
+      headers.authorization = `Bearer ${this.apiKey}`;
+    }
+
     const response = await fetch(`${this.baseUrl}${CHAT_COMPLETIONS_ENDPOINT}`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(this.buildRequest(messages, options, stream)),
       signal: options.signal,
     });

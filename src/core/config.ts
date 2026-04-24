@@ -16,6 +16,7 @@ export interface OllamaRuntimeConfig {
 export interface OlmxRuntimeConfig {
   baseUrl: string;
   model: string;
+  apiKey?: string;
 }
 
 export interface FasterWhisperRuntimeConfig {

@@ -1,8 +1,10 @@
 import { loadConfig } from '../core/config.js';
 import { OlmxForegroundProvider } from '../core/providers/olmx.js';
 import { resolveRuntimeConfigFromEnvironment } from '../core/runtime-config-resolution.js';
+import { loadEnvFile } from '../core/startup-check.js';
 
 async function main(): Promise<void> {
+  loadEnvFile(process.env);
   const runtimeConfig = resolveRuntimeConfigFromEnvironment(loadConfig(), process.env);
   const prompt = readPrompt(process.argv.slice(2));
   const provider = new OlmxForegroundProvider(runtimeConfig.olmx);

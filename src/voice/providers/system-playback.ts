@@ -1,4 +1,5 @@
 import type { StreamingAudioQueue } from '../streaming-audio-queue.js';
+import { logTtsDiag } from '../tts-diagnostics.js';
 import type { PlaybackOptions, PlaybackProvider } from './playback.js';
 
 export interface SystemPlaybackProviderConfig {
@@ -94,8 +95,19 @@ export class SystemPlaybackProvider implements PlaybackProvider {
     resolveCompleted: (audio: Buffer) => void,
     rejectCompleted: (error: Error) => void,
   ): Promise<void> {
+    const startedAt = Date.now();
+    let firstChunkLogged = false;
+
     try {
       for await (const chunk of source) {
+        if (!firstChunkLogged) {
+          logTtsDiag('tts-playback', 'first_chunk_to_playback_queue', {
+            t: Date.now() - startedAt,
+            bytes: chunk.byteLength,
+          });
+          firstChunkLogged = true;
+        }
+
         chunks.push(chunk);
         bufferedChunks.push(chunk);
         this.flushPrefetchedWaiters(waiters);

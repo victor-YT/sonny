@@ -117,9 +117,9 @@ export function loadStartupEnvironment(
   };
 }
 
-function loadEnvFile(
-  environment: NodeJS.ProcessEnv,
-  envPath: string,
+export function loadEnvFile(
+  environment: NodeJS.ProcessEnv = process.env,
+  envPath: string = DEFAULT_ENV_PATH,
 ): void {
   if (!existsSync(envPath)) {
     return;

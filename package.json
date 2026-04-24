@@ -29,6 +29,7 @@
     "stt:sherpa:test": "pnpm run build && node dist/dev/sherpa-onnx-smoke.js",
     "stt:sherpa:model": "bash ./scripts/download-sherpa-onnx-model.sh",
     "stt:benchmark": "pnpm run build && node dist/dev/stt-benchmark.js",
+    "tts:benchmark": "pnpm run build && node dist/dev/tts-benchmark.js",
     "lint": "eslint src/"
   },
   "keywords": [],

@@ -65,6 +65,7 @@ export function validateConfig(value: unknown): RuntimeConfig {
       model:
         readOptionalString(olmx, 'config.olmx.model', issues, 'model') ??
         'Qwen2.5-1.5B-Instruct-4bit',
+      apiKey: readOptionalString(olmx, 'config.olmx.apiKey', issues, 'apiKey'),
     },
     voice: {
       fasterWhisper: {

@@ -13,6 +13,7 @@ import {
   type StreamingAudioQueueItemMetadata,
   type StreamingAudioQueueListener,
 } from './streaming-audio-queue.js';
+import { logTtsDiag } from './tts-diagnostics.js';
 
 const TEMP_DIR_PREFIX = 'sonny-speaker-';
 const TEMP_FILE_NAME = 'response.audio';
@@ -348,11 +349,17 @@ export class Speaker {
     }
 
     if (this.currentProcess === undefined) {
+      const spawnStartedAt = Date.now();
       try {
         await this.spawnStreamingPlayer({
           id: itemId,
           metadata,
           audio: Buffer.alloc(0),
+        });
+        logTtsDiag('tts-playback', 'streaming_player_spawned', {
+          t: Date.now() - spawnStartedAt,
+          command: this.lastPlayerCommand ?? 'unknown',
+          first_chunk_bytes: chunk.byteLength,
         });
       } catch (error: unknown) {
         if (this.isMissingCommandError(error)) {

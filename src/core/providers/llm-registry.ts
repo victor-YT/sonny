@@ -50,6 +50,7 @@ function createLaneProvider(
         provider: new OlmxForegroundProvider({
           baseUrl: runtimeConfig.olmx.baseUrl,
           model,
+          apiKey: runtimeConfig.olmx.apiKey,
         }),
         model,
       };

@@ -1,3 +1,4 @@
+import { logTtsDiag as logTtsDiagShared } from '../tts-diagnostics.js';
 import type { TtsOptions, TtsProvider } from './tts.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8001';
@@ -5,6 +6,10 @@ const DEFAULT_SYNTHESIZE_PATH = '/synthesize';
 const DEFAULT_STREAM_SYNTHESIZE_PATH = '/synthesize/stream';
 const DEFAULT_WARMUP_PATH = '/warmup';
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+function logTtsDiag(event: string, fields: Record<string, string | number>): void {
+  logTtsDiagShared('tts-client', event, fields);
+}
 
 interface Qwen3TtsJsonResponse {
   audio: string;
@@ -65,14 +70,33 @@ export class Qwen3TTSProvider implements TtsProvider {
   ): Promise<Buffer> {
     options.timingTracker?.start('tts_synthesis');
 
+    const requestStartedAt = Date.now();
+    logTtsDiag('request_started', {
+      text_len: text.length,
+      voice: options.voice ?? 'default',
+      mode: 'non-stream',
+    });
+
     try {
       const response = await this.request(this.synthesizePath, text, options);
+      logTtsDiag('headers_received', {
+        t: Date.now() - requestStartedAt,
+        status: response.status,
+        mode: 'non-stream',
+      });
 
       if (!response.ok) {
         throw new Error(await this.buildHttpError(response));
       }
 
-      return this.readAudioResponse(response);
+      const audio = await this.readAudioResponse(response);
+      logTtsDiag('full_response_received', {
+        t: Date.now() - requestStartedAt,
+        bytes: audio.byteLength,
+        mode: 'non-stream',
+      });
+
+      return audio;
     } finally {
       options.timingTracker?.end('tts_synthesis');
     }
@@ -82,24 +106,60 @@ export class Qwen3TTSProvider implements TtsProvider {
     text: string,
     options: TtsOptions = {},
   ): AsyncIterable<Buffer> {
-    const response = await this.request(this.streamSynthesizePath, text, options);
+    options.timingTracker?.start('tts_synthesis');
 
-    if (!response.ok) {
-      throw new Error(await this.buildHttpError(response));
-    }
+    const requestStartedAt = Date.now();
+    logTtsDiag('request_started', {
+      text_len: text.length,
+      voice: options.voice ?? 'default',
+    });
 
-    if (response.body === null) {
-      throw new Error('Qwen3-TTS streaming response body was unavailable');
-    }
+    let totalBytes = 0;
+    let chunkCount = 0;
+    let firstChunkLogged = false;
 
-    for await (const chunk of response.body) {
-      const buffer = Buffer.from(chunk);
+    try {
+      const response = await this.request(this.streamSynthesizePath, text, options);
+      logTtsDiag('headers_received', {
+        t: Date.now() - requestStartedAt,
+        status: response.status,
+      });
 
-      if (buffer.byteLength === 0) {
-        continue;
+      if (!response.ok) {
+        throw new Error(await this.buildHttpError(response));
       }
 
-      yield buffer;
+      if (response.body === null) {
+        throw new Error('Qwen3-TTS streaming response body was unavailable');
+      }
+
+      for await (const chunk of response.body) {
+        const buffer = Buffer.from(chunk);
+
+        if (buffer.byteLength === 0) {
+          continue;
+        }
+
+        if (!firstChunkLogged) {
+          logTtsDiag('first_chunk_received', {
+            t: Date.now() - requestStartedAt,
+            bytes: buffer.byteLength,
+          });
+          firstChunkLogged = true;
+        }
+
+        totalBytes += buffer.byteLength;
+        chunkCount += 1;
+        yield buffer;
+      }
+
+      logTtsDiag('stream_done', {
+        t: Date.now() - requestStartedAt,
+        total_bytes: totalBytes,
+        chunks: chunkCount,
+      });
+    } finally {
+      options.timingTracker?.end('tts_synthesis');
     }
   }
 
