@@ -1,6 +1,6 @@
-const TTS_DIAG_ENABLED =
-  process.env.SONNY_TTS_DIAG === '1' ||
-  process.env.SONNY_TTS_DIAG === 'true';
+import { isDebugEnabled } from '../core/debug-log.js';
+
+const TTS_DIAG_ENABLED = isDebugEnabled('SONNY_TTS_DIAG');
 
 export function isTtsDiagEnabled(): boolean {
   return TTS_DIAG_ENABLED;

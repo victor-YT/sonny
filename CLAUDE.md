@@ -1,23 +1,26 @@
 # Sonny
 
-Local-first personal AI assistant with persistent memory, voice, and personality.
+Local-first AI voice assistant runtime with inspectable provider-based speech and LLM pipelines.
 
 ## Stack
 - TypeScript / Node.js / pnpm
-- Electron + menubar (UI)
-- Ollama (local LLM), OpenAI/Anthropic (optional)
-- Porcupine (wake word, Node SDK)
-- faster-whisper (STT, HTTP service)
-- Chatterbox Turbo (TTS, HTTP service)
+- Electron tray host + localhost React control center
+- OLMX foreground LLM, Ollama background/fallback LLM
+- sherpa-onnx realtime STT, faster-whisper fallback
+- Qwen3-TTS streaming HTTP service
+- Porcupine/openWakeWord experiments
 - Markdown + SQLite (memory)
 - Playwright (browser automation)
 
 ## Structure
-- `src/core/` — gateway, session, tool routing
-- `src/voice/` — wake word, STT, TTS providers
+- `src/core/` — gateway, provider routing, config, runtime state
+- `src/core/providers/` — LLM providers
+- `src/voice/` — microphone, STT, TTS, playback, orchestration, diagnostics
+- `src/voice/providers/` — swappable voice providers
 - `src/memory/` — three-tier memory system
 - `src/skills/` — built-in skills, sandbox, permissions
-- `src/ui/` — electron menubar + capsule overlay
+- `src/ui/` — Electron tray host for the control center
+- `console-web/` — React control center
 
 ## Rules
 - TypeScript strict mode, no `any`

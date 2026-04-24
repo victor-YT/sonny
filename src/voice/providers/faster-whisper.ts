@@ -5,6 +5,7 @@ import type {
   SttResult,
   SttSegment,
 } from './stt.js';
+import { debugLog, debugWarn, isDebugEnabled } from '../../core/debug-log.js';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8000';
 const DEFAULT_TRANSCRIBE_PATH = '/transcribe';
@@ -143,11 +144,10 @@ export class FasterWhisperProvider implements SttProvider {
         sttRequestSkippedBecauseEmpty: true,
       };
 
-      if (this.shouldLogDiagnostics()) {
-        console.warn(
-          `[stt] audio stream closed before any non-empty chunk was produced; skipping ${requestUrl}`,
-        );
-      }
+      debugWarn(
+        'SONNY_STT_DEBUG',
+        `[stt] audio stream closed before any non-empty chunk was produced; skipping ${requestUrl}`,
+      );
 
       throw new Error(
         'stt_empty_audio: audio stream closed before any non-empty chunk was produced',
@@ -208,7 +208,8 @@ export class FasterWhisperProvider implements SttProvider {
       liveMicDebug.sttRequestSkippedBecauseEmpty = false;
       this.logStreamingFetchStarted(requestUrl, liveMicDebug);
     } else if (this.shouldLogDiagnostics()) {
-      console.log(
+      debugLog(
+        'SONNY_STT_DEBUG',
         `[stt] streaming request to ${requestUrl} starting (${metrics.totalBytesSent} bytes enqueued across ${metrics.nonEmptyChunkCount} chunk(s))`,
       );
     }
@@ -316,7 +317,8 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     if (this.shouldLogDiagnostics()) {
-      console.log(
+      debugLog(
+        'SONNY_STT_DEBUG',
         `[stt] streaming request to ${requestUrl} complete: ` +
           `${metrics.totalBytesSent} bytes across ${metrics.nonEmptyChunkCount} chunk(s)`,
       );
@@ -654,15 +656,15 @@ export class FasterWhisperProvider implements SttProvider {
     }
 
     if (shouldLogEnqueue) {
-      console.log(
-        '[stt] enqueue chunk',
-        JSON.stringify({
+      debugLog(
+        'SONNY_STT_DEBUG',
+        `[stt] enqueue chunk ${JSON.stringify({
           byteLength: chunk.byteLength,
           chunkIndex,
           totalEnqueuedBytes: metrics.totalBytesSent,
           totalEnqueuedChunks: metrics.nonEmptyChunkCount,
           requestStreamClosed: metrics.requestStreamClosed,
-        }),
+        })}`,
       );
     }
   }
@@ -697,21 +699,21 @@ export class FasterWhisperProvider implements SttProvider {
   }
 
   private shouldLogDiagnostics(): boolean {
-    return process.env.SONNY_STT_DEBUG === '1';
+    return isDebugEnabled('SONNY_STT_DEBUG');
   }
 
   private logRequestBodyCanceled(
     metrics: StreamSendMetrics,
     reason: unknown,
   ): void {
-    console.warn(
-      '[stt] request body canceled',
-      JSON.stringify({
+    debugWarn(
+      'SONNY_STT_DEBUG',
+      `[stt] request body canceled ${JSON.stringify({
         reason: stringifyUnknown(reason),
         totalEnqueuedBytes: metrics.totalBytesSent,
         totalEnqueuedChunks: metrics.nonEmptyChunkCount,
         requestStreamClosed: metrics.requestStreamClosed,
-      }),
+      })}`,
     );
   }
 
@@ -721,9 +723,9 @@ export class FasterWhisperProvider implements SttProvider {
     elapsedMs: number,
     metrics: StreamSendMetrics,
   ): void {
-    console.log(
-      '[stt] response headers received',
-      JSON.stringify({
+    debugLog(
+      'SONNY_STT_DEBUG',
+      `[stt] response headers received ${JSON.stringify({
         requestUrl,
         responseStatus: response.status,
         elapsedMs,
@@ -731,7 +733,7 @@ export class FasterWhisperProvider implements SttProvider {
         totalEnqueuedChunks: metrics.nonEmptyChunkCount,
         requestBodyFinished: metrics.requestBodyFinishedNormally,
         requestStreamClosed: metrics.requestStreamClosed,
-      }),
+      })}`,
     );
   }
 
@@ -739,16 +741,16 @@ export class FasterWhisperProvider implements SttProvider {
     requestUrl: string,
     debug: NonNullable<SttOptions['streamingDebug']>,
   ): void {
-    console.log(
-      '[stt] streaming fetch started',
-      JSON.stringify({
+    debugLog(
+      'SONNY_STT_DEBUG',
+      `[stt] streaming fetch started ${JSON.stringify({
         requestUrl,
         streamBytesSent: debug.streamBytesSent,
         streamNonEmptyChunkCount: debug.streamNonEmptyChunkCount,
         captureEndedBy: debug.captureEndedBy,
         firstNonEmptyChunkReceived: debug.firstNonEmptyChunkReceived,
         endedBeforeFirstChunk: debug.endedBeforeFirstChunk,
-      }),
+      })}`,
     );
   }
 
@@ -757,9 +759,9 @@ export class FasterWhisperProvider implements SttProvider {
     debug: NonNullable<SttOptions['streamingDebug']>,
     reason: string,
   ): void {
-    console.warn(
-      '[stt] streaming fetch skipped',
-      JSON.stringify({
+    debugWarn(
+      'SONNY_STT_DEBUG',
+      `[stt] streaming fetch skipped ${JSON.stringify({
         requestUrl,
         reason,
         streamBytesSent: debug.streamBytesSent,
@@ -768,7 +770,7 @@ export class FasterWhisperProvider implements SttProvider {
         firstNonEmptyChunkReceived: debug.firstNonEmptyChunkReceived,
         endedBeforeFirstChunk: debug.endedBeforeFirstChunk,
         sttRequestSkippedBecauseEmpty: debug.sttRequestSkippedBecauseEmpty,
-      }),
+      })}`,
     );
   }
 

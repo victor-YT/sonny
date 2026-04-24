@@ -1,230 +1,104 @@
 # Sonny
 
-Sonny is a local-first personal AI assistant built to live on your machine, remember what matters, and develop a consistent voice over time.
+Sonny is a local-first AI voice assistant runtime. It runs on your machine, exposes a localhost control center, and keeps the voice pipeline inspectable end to end.
 
-The project takes its name from Sonny in *I, Robot*: the one machine in the story that feels less like a tool and more like an individual. That is the design target here. Sonny should not behave like a stateless chatbot tab. It should feel like a durable assistant with memory, judgment, and a point of view.
+The current launch/demo path is intentionally narrow:
 
-## Philosophy
-
-Most assistants are optimized for breadth, not continuity. They can answer almost anything, but they forget who they are talking to as soon as the window closes.
-
-Sonny is built around a different assumption:
-
-- Your assistant should be local-first by default.
-- Your assistant should accumulate useful memory, not just logs.
-- Your assistant should have a stable personality instead of a random tone per session.
-- Your assistant should be able to speak, listen, monitor, and surface important changes proactively.
-- Your assistant should expose risky capabilities through explicit permissions, not hidden magic.
-
-The goal is not “yet another chat UI.” The goal is a personal AI runtime you can own, inspect, extend, and trust.
-
-## 🚀 Quick Demo (No Microphone Required)
-
-If you want to validate Sonny’s current voice stack without speaking into the mic:
-
-```bash
-pnpm voice:simulate
+```text
+microphone -> silence detection -> sherpa-onnx STT -> routed LLM -> Qwen3-TTS streaming -> local playback
 ```
 
-That runs the existing voice pipeline through a local sample path:
+Sonny is not a hosted chatbot and does not require a cloud control plane. Model assets, runtime state, logs, and memory stay local unless you explicitly configure a remote provider.
 
-- STT
-- LLM
-- TTS
-- playback
+## Current Architecture
 
-It works without live microphone input and prints transcript output, latency fields, and pipeline verdicts for a full sample turn.
+- `src/app/voice-control-center.ts`: main runtime entrypoint for the Electron/control-center path
+- `console-web/`: React control center served from localhost
+- `src/core/`: gateway, provider routing, config, runtime state, memory/session plumbing
+- `src/core/providers/`: swappable LLM providers
+- `src/voice/`: microphone capture, STT/TTS/playback providers, voice orchestration, diagnostics
+- `src/voice/providers/`: swappable voice providers
+- `scripts/`: local service helpers for Qwen3-TTS, VAD, wake word experiments, and faster-whisper fallback
+- `docs/voice-runtime.md`: maintained voice runtime map
+- `docs/open-source-readiness.md`: cleanup audit and remaining safe refactor targets
 
-## Feature Overview
+The primary UI is the control center at `http://127.0.0.1:3001`. Electron is currently a small tray host that starts the runtime and opens the control center; there is no separate production chat window, capsule overlay, or legacy panel UI.
 
-### Available now
+## Provider Defaults
 
-- Local-first runtime via Ollama
-- Streaming voice pipeline with STT, LLM, TTS, and speaker playback
-- Emotion-aware response processing for speech
-- Minimal tray host
-- Localhost control center on port `3001`
-- Diagnostics and latency instrumentation
-- No-microphone simulation path for pipeline validation
-- Built-in tool/skill system with permission levels
-
-### In progress / planned
-
-- Wake word voice flow
-- Proactive web monitoring and notifications
-- Richer multi-layer memory system
-- Community-extensible skill registry
-
-## Sonny vs OpenClaw
-
-This is a positioning comparison, not a benchmark shootout. The point is to explain what Sonny is trying to optimize for.
-
-| Area | OpenClaw | Sonny |
+| Layer | Default | Notes |
 | --- | --- | --- |
-| Core model | General assistant runtime | Personal assistant runtime |
-| Memory model | Conversation-centric | Durable user memory plus recent recall |
-| Personality | Usually prompt-level | Explicit personality and voice shaping |
-| Voice | Optional or external depending on setup | Built into the architecture |
-| UI | Primarily chat-oriented | Tray host plus localhost control center |
-| Proactive behavior | Limited by default | Web monitors, schedules, notifications |
-| Extensibility | Agent/tool oriented | Built-in skills with runtime permission controls |
-| Security posture | Varies by deployment | Allowlists, permission levels, sandboxed execution path |
-| Data ownership | Depends on deployment | Local-first by design |
+| STT | `sherpa-onnx` | In-process realtime STT using `sherpa-onnx-node` |
+| STT fallback | `faster-whisper` | HTTP service via `scripts/whisper-server.py` |
+| Foreground LLM | `olmx-foreground` | OLMX OpenAI-compatible API, default model `Qwen2.5-1.5B-Instruct-4bit` |
+| Background LLM | `ollama-background` | Ollama, default model `qwen3:8b` |
+| TTS | `qwen3-tts` | Local Qwen3-TTS service with true `/synthesize/stream` audio streaming |
+| Playback | `system-player` | Local system playback through the streaming audio queue |
 
-## Architecture
+The LLM router sends short conversational turns to the foreground OLMX model and longer/complex turns to the background Ollama model. Provider selection is visible in the pipeline diagnostics.
 
-The main pieces are:
+## Quick Start
 
-- `src/core/`: gateway, session state, config, proactive runtime, notifications
-- `src/memory/`: long-term Markdown memory, recent SQLite memory, extraction/injection
-- `src/voice/`: microphone, STT, TTS, speaker playback, response shaping, voice runtime orchestration
-- `src/skills/`: built-in tool skills, permissions, monitor registry, web monitor
-- `src/ui/`: tray host, Electron entrypoint, localhost control center
-
-The maintained voice-runtime map is in [`docs/voice-runtime.md`](docs/voice-runtime.md). Update it with any voice pipeline, provider, or runtime state changes.
-
-## Setup Guide
-
-### Prerequisites
-
-Sonny is easiest to run on macOS today because local playback uses `afplay` and the bootstrap script assumes Homebrew.
-
-Install these first:
+Prerequisites for the current macOS demo path:
 
 - Node.js `22+`
 - `pnpm`
-- Python `3`
-- `Ollama`
+- Python `3.11+`
 - `sox`
-- a local Ollama model such as `qwen3:8b`
+- OLMX with an OpenAI-compatible API enabled
+- Ollama for background/fallback generation
+- enough local CPU/GPU/RAM for sherpa-onnx STT and Qwen3-TTS
 
-Optional, but required for specific flows:
-
-- a Picovoice Porcupine access key only if you are working on wake-word flows
-- Electron-compatible desktop environment for the tray host
-- enough local CPU/RAM for `sherpa-onnx-node` realtime STT and Qwen3-TTS
-- enough local CPU/GPU/RAM for `faster-whisper` if you select the fallback STT provider
-
-On macOS with Homebrew:
-
-```bash
-brew install node pnpm ollama sox
-```
-
-### Project Setup
-
-Fast path:
-
-```bash
-./scripts/install.sh
-```
-
-That script verifies macOS/Homebrew, installs missing packages, runs `pnpm install`, creates the expected `.local/` runtime layout, copies `.env.example` to `.env` if needed, and pulls the default Ollama model.
-
-Manual setup:
+Install dependencies:
 
 ```bash
 pnpm install
 cp .env.example .env
-mkdir -p .local/memory
-touch .local/memory/facts.md .local/memory/preferences.md .local/memory/goals.md .local/memory/patterns.md
 ```
 
-Make sure `.local/monitors.json` exists:
+Download the default sherpa-onnx streaming model:
 
-```json
-{
-  "monitors": []
-}
+```bash
+pnpm run stt:sherpa:model
 ```
 
-Start Ollama and pull the model Sonny should use:
+Start Ollama and pull the background model:
 
 ```bash
 ollama serve
 ollama pull qwen3:8b
 ```
 
-For low-latency foreground voice turns, start OLMX with its OpenAI-compatible
-local API enabled. Sonny expects chat completions at:
+Start OLMX separately and verify its API is reachable. Sonny expects:
 
 ```text
 http://127.0.0.1:8000/v1/chat/completions
 ```
 
-### Environment Configuration
-
-Sonny reads startup values from `.env`, tracked default settings from `config/config.json`, and local runtime state from `.local/`.
-
-The default `.env.example` contains:
-
-```env
-OLLAMA_MODEL=qwen3:8b
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_KEEP_ALIVE=-1
-SONNY_FOREGROUND_LLM_PROVIDER=olmx-foreground
-SONNY_FOREGROUND_MODEL=Qwen2.5-1.5B-Instruct-4bit
-OLMX_MODEL=Qwen2.5-1.5B-Instruct-4bit
-OLMX_BASE_URL=http://127.0.0.1:8000
-SONNY_BACKGROUND_LLM_PROVIDER=ollama-background
-SONNY_BACKGROUND_MODEL=qwen3:8b
-PORCUPINE_ACCESS_KEY=replace-me
-FASTER_WHISPER_URL=http://127.0.0.1:8000
-SONNY_STT_PROVIDER=sherpa-onnx
-SHERPA_ONNX_MODEL_DIR=models/sherpa-onnx-streaming-paraformer-bilingual-zh-en
-SHERPA_ONNX_ENCODER=encoder.int8.onnx
-SHERPA_ONNX_DECODER=decoder.int8.onnx
-SHERPA_ONNX_TOKENS=tokens.txt
-SHERPA_ONNX_LANGUAGE=zh
-CHATTERBOX_URL=http://127.0.0.1:8001
-VAD_URL=http://127.0.0.1:8003
-SONNY_VOICE_MODE=0
-```
-
-Important values:
-
-- `OLLAMA_MODEL`: model name for chat generation
-- `OLLAMA_BASE_URL`: Ollama HTTP endpoint
-- `SONNY_FOREGROUND_LLM_PROVIDER`: `olmx-foreground` by default for realtime voice turns
-- `SONNY_FOREGROUND_MODEL` / `OLMX_MODEL`: foreground OLMX model, default `Qwen2.5-1.5B-Instruct-4bit`
-- `OLMX_BASE_URL`: OLMX OpenAI-compatible base URL, default `http://127.0.0.1:8000`
-- `SONNY_BACKGROUND_LLM_PROVIDER`: `ollama-background` by default
-- `SONNY_BACKGROUND_MODEL`: background Ollama model, default `qwen3:8b`
-- `PORCUPINE_ACCESS_KEY`: required only for wake-word experiments
-- `SONNY_STT_PROVIDER`: `sherpa-onnx` by default; set `faster-whisper` for the fallback HTTP STT service
-- `SHERPA_ONNX_MODEL_DIR`: local sherpa-onnx streaming model directory
-- `SHERPA_ONNX_ENCODER`, `SHERPA_ONNX_DECODER`, `SHERPA_ONNX_JOINER`, `SHERPA_ONNX_TOKENS`: model asset paths; relative values are resolved under `SHERPA_ONNX_MODEL_DIR`
-- `SHERPA_ONNX_LANGUAGE`: language hint stored in STT results, default `zh`
-- `FASTER_WHISPER_URL`: fallback STT service URL when `SONNY_STT_PROVIDER=faster-whisper`
-- `CHATTERBOX_URL`: TTS service URL
-- `VAD_URL`: end-of-turn VAD service URL
-- `SONNY_VOICE_MODE`: `0`/`false` for non-voice startup, `1`/`true` for voice runtime startup
-
-`config/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and `.local/` for machine-local runtime data.
-
-### Local Voice Services Setup
-
-Sonny uses `sherpa-onnx-node` as the default in-process realtime STT provider. Voice mode still expects local HTTP services for TTS and VAD, and starts them automatically when they are not already healthy:
-
-- Qwen3-TTS on `http://127.0.0.1:8001`
-- VAD on `http://127.0.0.1:8003`
-
-The runtime still uses the compatibility name `CHATTERBOX_URL` for the TTS endpoint, but the bundled server script is `scripts/qwen3-tts-server.py`.
-
-#### STT: sherpa-onnx
+Install the Python dependencies for Qwen3-TTS/VAD in your local environment, then start services:
 
 ```bash
-pnpm run stt:sherpa:model
-pnpm run stt:sherpa:test -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
+python3 -m venv .venv
+source .venv/bin/activate
+pip install fastapi uvicorn numpy soundfile mlx-audio webrtcvad
+pnpm run start:services
 ```
 
-The bundled downloader installs the recommended streaming Mandarin + English int8 Paraformer model under:
+Start Sonny:
+
+```bash
+pnpm start
+```
+
+Open:
 
 ```text
-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en
+http://127.0.0.1:3001
 ```
 
-Default sherpa-onnx settings:
+## Environment
+
+Copy `.env.example` to `.env` and adjust local paths/ports. Important values:
 
 ```env
 SONNY_STT_PROVIDER=sherpa-onnx
@@ -236,350 +110,123 @@ SHERPA_ONNX_LANGUAGE=zh
 SHERPA_ONNX_MODEL_TYPE=paraformer
 SHERPA_ONNX_PROVIDER=cpu
 SHERPA_ONNX_NUM_THREADS=2
+
+SONNY_FOREGROUND_LLM_PROVIDER=olmx-foreground
+SONNY_FOREGROUND_MODEL=Qwen2.5-1.5B-Instruct-4bit
+OLMX_BASE_URL=http://127.0.0.1:8000
+OLMX_API_KEY=
+OLMX_MODEL=Qwen2.5-1.5B-Instruct-4bit
+
+SONNY_BACKGROUND_LLM_PROVIDER=ollama-background
+SONNY_BACKGROUND_MODEL=qwen3:8b
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_KEEP_ALIVE=-1
+
+SONNY_TTS_PROVIDER=qwen3-tts
+CHATTERBOX_URL=http://127.0.0.1:8001
+SONNY_TTS_BASE_URL=http://127.0.0.1:8001
+SONNY_TTS_VOICE=Ryan
+QWEN3_TTS_MODEL=mlx-community/Qwen3-TTS-1.7B-4bit
+QWEN3_TTS_LANGUAGE=English
+QWEN3_TTS_SPEAKER=Ryan
+QWEN3_TTS_STREAMING_INTERVAL=0.32
+
+SONNY_PLAYBACK_PROVIDER=system-player
+VAD_URL=http://127.0.0.1:8003
+SONNY_VOICE_MODE=0
 ```
 
-For a transducer model, also set:
+Diagnostic flags are disabled by default so demos do not spam the terminal:
 
 ```env
-SHERPA_ONNX_JOINER=joiner.int8.onnx
-SHERPA_ONNX_MODEL_TYPE=transducer
+SONNY_UI_DEBUG=0
+SONNY_GATEWAY_DEBUG=0
+SONNY_STT_DEBUG=0
+SONNY_TTS_DEBUG=0
+SONNY_TTS_DIAG=0
+SONNY_TIMING_DEBUG=0
 ```
 
-#### STT fallback: faster-whisper
+Set `SONNY_STT_PROVIDER=faster-whisper` and `FASTER_WHISPER_URL=http://127.0.0.1:8000` to use the fallback STT service.
 
-```bash
-SONNY_STT_PROVIDER=faster-whisper
-python3 -m venv .venv
-source .venv/bin/activate
-pip install fastapi uvicorn faster-whisper python-multipart
-python3 scripts/whisper-server.py
-```
+## Voice Runtime
 
-Useful overrides:
+A normal voice turn is:
 
-```bash
-FASTER_WHISPER_MODEL=small
-FASTER_WHISPER_DEVICE=auto
-FASTER_WHISPER_COMPUTE_TYPE=int8
-python3 scripts/whisper-server.py
-```
+1. Capture PCM from the microphone.
+2. Detect end-of-turn from VAD/silence.
+3. Stream audio chunks to sherpa-onnx and emit partial transcripts.
+4. Submit the final transcript to the gateway.
+5. Route the LLM request to OLMX foreground or Ollama background.
+6. Stream assistant text into sentence-sized speech segments.
+7. Stream each segment through Qwen3-TTS.
+8. Queue audio chunks directly to local playback.
 
-The STT service exposes:
+The control center shows:
 
-- `POST /transcribe` for buffered transcription
-- `POST /transcribe?stream=true` for streaming NDJSON transcript updates
+- service health and selected provider names
+- live microphone RMS bar
+- STT partial/final transcript details
+- LLM route/model/provider diagnostics
+- first token, first sentence, first audio, and first sound timing
+- raw pipeline/debug snapshots for local troubleshooting
 
-#### TTS: Qwen3-TTS
-
-```bash
-source .venv/bin/activate
-pip install fastapi uvicorn numpy torch qwen-tts
-python3 scripts/qwen3-tts-server.py
-```
-
-Health check:
-
-```bash
-curl http://127.0.0.1:8001/health
-```
-
-The TTS service accepts `POST /synthesize` and `POST /synthesize/stream`. Sonny’s app-level `voice` option is sent to that service as its `speaker` field.
-
-#### Starting both services together
-
-If your Python environment is already prepared, you can use the helper script:
-
-```bash
-pnpm run start:services
-```
-
-On Unix it prefers `.venv/bin/python` when present.
-
-### Running Sonny
-
-Build first:
+## Developer Commands
 
 ```bash
 pnpm build
-```
-
-The main interface is the localhost control center:
-
-```bash
-pnpm start
-```
-
-That starts:
-
-- the Sonny runtime
-- the localhost control center
-- the minimal tray host
-
-The primary UI is:
-
-```text
-http://127.0.0.1:3001
-```
-
-Sonny prints the control center URL on startup. The terminal is no longer the primary interaction surface.
-Set `SONNY_CONSOLE_PORT` if you need a different localhost port.
-
-#### Voice mode setup
-
-Before starting voice mode:
-
-1. Set `SONNY_VOICE_MODE=1` in `.env`.
-2. Run `pnpm run stt:sherpa:model` once to download the default sherpa-onnx model.
-3. Verify `SHERPA_ONNX_MODEL_DIR` points at the downloaded model and `CHATTERBOX_URL` matches the TTS service.
-4. Open the localhost control center.
-
-Then start Sonny normally:
-
-```bash
-pnpm start
-```
-
-In voice mode Sonny:
-
-1. runs the voice runtime locally
-2. accepts manual or simulated voice turns through the control center
-3. transcribes with sherpa-onnx realtime STT by default
-4. generates a response with the gateway
-5. reshapes the response for speech
-6. synthesizes streamed audio with Qwen3-TTS
-7. plays the result locally
-
-Optional voice-related environment overrides supported by `src/voice/voice-gateway.ts` include:
-
-- `SONNY_WAKE_WORDS`
-- `SONNY_STT_PROVIDER`
-- `SONNY_FOREGROUND_LLM_PROVIDER`
-- `SONNY_BACKGROUND_LLM_PROVIDER`
-- `OLMX_BASE_URL`
-- `OLMX_MODEL`
-- `SONNY_TTS_PROVIDER`
-- `SONNY_PLAYBACK_PROVIDER`
-- `SONNY_FOREGROUND_MODEL`
-- `SONNY_BACKGROUND_MODEL`
-- `SONNY_STT_LANGUAGE`
-- `SHERPA_ONNX_MODEL_DIR`
-- `SHERPA_ONNX_ENCODER`
-- `SHERPA_ONNX_DECODER`
-- `SHERPA_ONNX_JOINER`
-- `SHERPA_ONNX_TOKENS`
-- `SHERPA_ONNX_LANGUAGE`
-- `SHERPA_ONNX_MODEL_TYPE`
-- `SHERPA_ONNX_PROVIDER`
-- `SHERPA_ONNX_NUM_THREADS`
-- `SONNY_TTS_VOICE`
-- `SONNY_WAKE_WORD_SENSITIVITY`
-- `SONNY_MIC_SAMPLE_RATE_HERTZ`
-- `SONNY_MIC_SILENCE_SECONDS`
-- `SONNY_MIC_MAX_CAPTURE_MS`
-- `SONNY_MIC_RECORD_PROGRAM`
-- `SONNY_MIC_GAIN_DB`
-- `SONNY_VAD_BASE_URL`
-- `VAD_URL`
-
-Provider resolution can be inspected with:
-
-```bash
-pnpm run voice:providers
-```
-
-Smoke-test OLMX directly:
-
-```bash
-pnpm run llm:olmx:test
-```
-
-Switch foreground generation back to Ollama with:
-
-```env
-SONNY_FOREGROUND_LLM_PROVIDER=ollama-foreground
-SONNY_FOREGROUND_MODEL=qwen3:8b
-```
-
-#### Desktop host behavior
-
-`pnpm start` launches Sonny’s Electron shell as a minimal tray host. It does not open a separate popup chat window.
-
-The tray remains useful for presence and quick access:
-
-- tray status reflects runtime state
-- clicking the tray opens the localhost control center in the default browser
-
-### Keyboard Shortcuts
-
-- `Ctrl+C` stops Sonny from the terminal that launched it
-
-### Integration Tests
-
-The repo now includes integration coverage for voice service connectivity and the gateway send-message flow:
-
-```bash
 pnpm test
+pnpm run voice:providers
+pnpm run voice:simulate
+pnpm run llm:olmx:test
+pnpm run stt:sherpa:test -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
+pnpm run stt:benchmark -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
+pnpm run tts:benchmark
 ```
 
-That compiles `src/` plus `tests/` with `tsconfig.test.json` and runs:
+`pnpm run voice:providers` prints the resolved provider stack, OLMX reachability, model names, and service URLs. Run it before demos.
 
-- `tests/voice-pipeline.test.ts`
-- `tests/gateway.test.ts`
+## Local Data And Models
 
-### Troubleshooting
+Ignored local paths include:
 
-- Startup validation fails: copy `.env.example` to `.env` and fill in the missing values called out in the error message.
-- Ollama requests fail: make sure `ollama serve` is running and `OLLAMA_BASE_URL` matches it.
-- Voice mode starts but STT/TTS/VAD calls fail: confirm the local services are running on `8000`, `8001`, and `8003`, or update `FASTER_WHISPER_URL`, `CHATTERBOX_URL`, and `VAD_URL`.
-- TTS server exits immediately: install `fastapi`, `uvicorn`, `numpy`, `torch`, and `qwen-tts` in the Python environment used to launch `scripts/qwen3-tts-server.py`.
-- Microphone capture fails with a missing module error: Sonny loads `node-record-lpcm16` at runtime. Install it with `pnpm add node-record-lpcm16` if your environment does not already provide it.
-- Wake-word experiments never trigger: verify `PORCUPINE_ACCESS_KEY`, check your microphone permissions, and lower `SONNY_WAKE_WORD_SENSITIVITY` only if you are getting false positives rather than misses.
-- No local playback: confirm `sox` is installed and that macOS can run `afplay`.
+- `.env`
+- `.local/`
+- `models/`
+- `dist/`
+- `dist-test/`
+- `src/ui/console/public/`
 
-## Memory System
+Do not commit model files, generated runtime data, logs, local memory, or built control-center assets.
 
-Sonny uses a three-part memory model.
+## Troubleshooting
 
-### 1. Long-term memory
-
-Long-term memory is stored as Markdown files in `.local/memory/`:
-
-- `facts.md`
-- `preferences.md`
-- `goals.md`
-- `patterns.md`
-
-These are intended to capture durable information about the user, not every transcript line.
-
-### 2. Recent memory
-
-Recent interactions are stored in `.local/memory/recent.json`.
-
-This gives Sonny short-horizon recall for the last several days without polluting long-term memory with temporary details.
-
-### 3. Memory extraction and injection
-
-After a session, Sonny can summarize the conversation into structured long-term memory categories:
-
-- facts
-- preferences
-- goals
-- patterns
-
-When the next user message arrives, Sonny ranks relevant long-term snippets and recent entries, then injects only the most relevant context into the system prompt.
-
-That gives you:
-
-- better continuity than plain chat history
-- lower prompt noise than dumping everything every time
-- a clearer separation between durable memory and temporary context
-
-## Skills
-
-Sonny has a built-in skill system that attaches tool definitions to the gateway and gates risky operations with permission levels.
-
-### Built-in skills
-
-Current built-in skills include:
-
-- `sandbox.execute`
-  Sandboxed code or command execution path
-
-- `web.search`
-  Read-only DuckDuckGo Instant Answer search
-
-- `file.tool`
-  Allowlisted file reads and writes
-
-- `shell.tool`
-  Allowlisted shell commands with risk-based confirmation
-
-There are also runtime subsystems around monitoring:
-
-- `MonitorRegistry` persists watch targets in `.local/monitors.json`
-- `WebMonitor` polls enabled URLs and emits proactive notifications when content changes
-
-### Permission model
-
-Skill permissions are defined in `config/config.json` with:
-
-- `enabled`
-- `defaultLevel`
-- `maxLevel`
-
-Permission levels are:
-
-- `low`
-- `medium`
-- `high`
-
-Medium and high risk operations require explicit confirmation.
-
-### Installing community skills
-
-Sonny does not yet ship a packaged plugin marketplace. Today, “community skills” means source-level installation.
-
-The current install path is:
-
-1. Add the skill implementation under `src/skills/`.
-2. Make it expose a `ToolDefinition` and `execute(args)` method compatible with the built-in skill interface.
-3. Register it in `SkillRegistry`.
-4. Add permission settings for the tool in `config/config.json`.
-5. Build again with `pnpm build`.
-
-A minimal workflow looks like this:
-
-```text
-src/skills/my-skill.ts
-  -> implement BuiltInSkill
-src/skills/skill-registry.ts
-  -> register new MySkill()
-config/config.json
-  -> add skills.permissions.my.skill
-```
-
-That is intentionally simple for now. A true community skill installer can be layered on later without changing the core tool contract.
+- OLMX is unreachable: confirm the OLMX server is running and `OLMX_BASE_URL` points to the OpenAI-compatible base URL, not a UI-only URL.
+- Background LLM fails: start Ollama and verify `OLLAMA_BASE_URL`.
+- sherpa-onnx model missing: run `pnpm run stt:sherpa:model`.
+- Qwen3-TTS fails: start `scripts/qwen3-tts-server.py`, then check `http://127.0.0.1:8001/health`.
+- No playback: install `sox`; macOS file fallback also uses `afplay`.
+- Mic permissions fail on macOS: grant terminal/Electron microphone permission and restart.
 
 ## Contributing
 
-Contributions are welcome, but keep the project’s design bar in mind.
-
-### Ground rules
+Keep changes small and provider-friendly:
 
 - TypeScript strict mode
 - ESM only
 - no `any`
-- keep provider interfaces swappable
-- English only in code comments and docs
-- prefer local-first, inspectable behavior over opaque convenience
+- provider interfaces before provider implementations
+- local-first defaults
+- no raw stderr/tool output in assistant speech
+- diagnostics behind env flags unless they are user-facing control-center state
 
-### Recommended workflow
+Before opening a PR:
 
-1. Fork the repo.
-2. Create a focused branch.
-3. Make a small, coherent change.
-4. Run `pnpm build`.
-5. Open a PR with a clear explanation of behavior changes and risks.
-
-### Good contribution areas
-
-- new skills
-- memory quality improvements
-- safer permission handling
-- UI polish for the tray host and control center
-- voice stability and streaming improvements
-- documentation and onboarding
-
-### Before adding a new subsystem
-
-Ask:
-
-- Does this preserve local-first behavior?
-- Does it expose risk clearly?
-- Can the provider be swapped later?
-- Does it improve continuity, usefulness, or trust?
-
-If the answer is mostly “no,” it probably belongs outside Sonny.
+```bash
+pnpm build
+pnpm test
+pnpm run voice:providers
+```
 
 ## License
 

@@ -1,7 +1,7 @@
 {
   "name": "sonny",
   "version": "1.0.0",
-  "description": "",
+  "description": "Local-first AI voice assistant runtime with swappable STT, LLM, TTS, and playback providers.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -32,7 +32,13 @@
     "tts:benchmark": "pnpm run build && node dist/dev/tts-benchmark.js",
     "lint": "eslint src/"
   },
-  "keywords": [],
+  "keywords": [
+    "local-first",
+    "voice-assistant",
+    "speech-to-text",
+    "text-to-speech",
+    "llm"
+  ],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.32.0",
@@ -50,7 +56,6 @@
     "electron": "^34.5.8",
     "express": "^5.2.1",
     "jimp": "^1.6.0",
-    "menubar": "^9.5.2",
     "node-notifier": "^10.0.1",
     "node-record-lpcm16": "^1.0.1",
     "sherpa-onnx-node": "^1.12.39"

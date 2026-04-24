@@ -2,14 +2,17 @@ import { app, shell, type Tray } from 'electron';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { debugLog } from '../core/debug-log.js';
 import type { RuntimeStateStore, SonnyRuntimeState } from '../core/runtime-state.js';
 import { TrayController } from './tray.js';
 
 const TOOLTIP = 'Sonny';
+const UI_DEBUG_FLAG = 'SONNY_UI_DEBUG';
 const __filename = fileURLToPath(import.meta.url);
 let activeUiMainApp: UiMainApp | undefined;
 
-console.log(
+debugLog(
+  UI_DEBUG_FLAG,
   `[ui.main] JS is running modulePath=${__filename} argv1=${process.argv[1] ?? 'undefined'} electron=${process.versions.electron ?? 'undefined'}`,
 );
 
@@ -42,14 +45,14 @@ export class UiMainApp {
   }
 
   public async start(): Promise<Tray> {
-    console.log('[ui.main] before app.whenReady()');
+    debugLog(UI_DEBUG_FLAG, '[ui.main] before app.whenReady()');
     await app.whenReady();
-    console.log('[ui.main] app.whenReady() resolved');
+    debugLog(UI_DEBUG_FLAG, '[ui.main] app.whenReady() resolved');
     app.setName('Sonny');
     app.dock?.hide();
 
     if (this.tray !== undefined) {
-      console.log('[ui.main] tray already created');
+      debugLog(UI_DEBUG_FLAG, '[ui.main] tray already created');
       return this.tray;
     }
 
@@ -59,7 +62,8 @@ export class UiMainApp {
     this.attachRuntimeState();
     this.trayController.setStatus(this.status.status);
 
-    console.log(
+    debugLog(
+      UI_DEBUG_FLAG,
       `[ui.main] tray ready controlCenterUrl=${this.controlCenterUrl ?? 'unavailable'}`,
     );
 
@@ -78,17 +82,18 @@ export class UiMainApp {
   private registerAppLifecycle(): void {
     app.on('before-quit', () => {
       this.stopping = true;
-      console.log('[ui.main] before-quit fired');
+      debugLog(UI_DEBUG_FLAG, '[ui.main] before-quit fired');
     });
 
     app.on('window-all-closed', () => {
-      console.log(
+      debugLog(
+        UI_DEBUG_FLAG,
         `[ui.main] window-all-closed fired stopping=${this.stopping}`,
       );
     });
 
     app.on('activate', () => {
-      console.log('[ui.main] app activate event fired');
+      debugLog(UI_DEBUG_FLAG, '[ui.main] app activate event fired');
 
       if (this.controlCenterUrl !== undefined) {
         void this.openControlCenter('activate');
@@ -96,11 +101,11 @@ export class UiMainApp {
     });
 
     app.on('quit', () => {
-      console.log('[ui.main] app quit event fired');
+      debugLog(UI_DEBUG_FLAG, '[ui.main] app quit event fired');
     });
 
     process.once('beforeExit', (code) => {
-      console.log(`[ui.main] process beforeExit fired code=${code}`);
+      debugLog(UI_DEBUG_FLAG, `[ui.main] process beforeExit fired code=${code}`);
     });
   }
 
@@ -116,11 +121,12 @@ export class UiMainApp {
 
   private async openControlCenter(source: string): Promise<void> {
     if (this.controlCenterUrl === undefined) {
-      console.log(`[ui.main] control center URL unavailable source=${source}`);
+      debugLog(UI_DEBUG_FLAG, `[ui.main] control center URL unavailable source=${source}`);
       return;
     }
 
-    console.log(
+    debugLog(
+      UI_DEBUG_FLAG,
       `[ui.main] opening control center source=${source} url=${this.controlCenterUrl}`,
     );
     await shell.openExternal(this.controlCenterUrl);
@@ -191,13 +197,13 @@ export async function startUiMainApp(
   config: UiMainAppConfig = {},
 ): Promise<UiMainApp> {
   if (activeUiMainApp !== undefined) {
-    console.log('[ui.main] reusing active UiMainApp instance');
+    debugLog(UI_DEBUG_FLAG, '[ui.main] reusing active UiMainApp instance');
     return activeUiMainApp;
   }
 
   const application = new UiMainApp(config);
   activeUiMainApp = application;
-  console.log('[ui.main] activeUiMainApp reference retained');
+  debugLog(UI_DEBUG_FLAG, '[ui.main] activeUiMainApp reference retained');
   await application.start();
   return application;
 }
@@ -206,14 +212,15 @@ function shouldAutoStartUiMainApp(): boolean {
   const entryArgument = process.argv[1];
 
   if (entryArgument === undefined) {
-    console.log('[ui.main] auto-start disabled because argv[1] is undefined');
+    debugLog(UI_DEBUG_FLAG, '[ui.main] auto-start disabled because argv[1] is undefined');
     return false;
   }
 
   const resolvedEntryPath = resolve(process.cwd(), entryArgument);
   const shouldStart = resolvedEntryPath === __filename;
 
-  console.log(
+  debugLog(
+    UI_DEBUG_FLAG,
     `[ui.main] auto-start check entryArgument=${entryArgument} resolvedEntryPath=${resolvedEntryPath} modulePath=${__filename} shouldStart=${shouldStart}`,
   );
 

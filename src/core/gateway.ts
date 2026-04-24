@@ -7,6 +7,7 @@ import {
   ContextManager,
   type ContextManagerConfig,
 } from './context-manager.js';
+import { debugLog } from './debug-log.js';
 import {
   ConversationHistory,
   type PersistedConversationMessage,
@@ -456,7 +457,8 @@ export class Gateway {
   ): void {
     const decision = this.getLastLlmRoutingDecision();
 
-    console.log(
+    debugLog(
+      'SONNY_GATEWAY_DEBUG',
       JSON.stringify({
         type: 'gateway_assistant_response_before_tts',
         sourceKind: 'model',
@@ -485,7 +487,8 @@ export class Gateway {
       return;
     }
 
-    console.log(
+    debugLog(
+      'SONNY_GATEWAY_DEBUG',
       `[gateway] llm route=${decision.lane} provider=${decision.providerId} model=${decision.model ?? 'unknown'} reason=${decision.reason}`,
     );
   }

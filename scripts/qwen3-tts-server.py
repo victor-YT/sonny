@@ -32,6 +32,7 @@ DEFAULT_MODEL_ID = os.getenv(
 DEFAULT_LANGUAGE = os.getenv("QWEN3_TTS_LANGUAGE", "English")
 DEFAULT_SPEAKER = os.getenv("QWEN3_TTS_SPEAKER", "Ryan")
 DEFAULT_STREAMING_INTERVAL = float(os.getenv("QWEN3_TTS_STREAMING_INTERVAL", "0.32"))
+TTS_TIMING_ENABLED = os.getenv("SONNY_TTS_DIAG", "").lower() in {"1", "true", "yes", "on"}
 LOCK_PATH = Path(os.getenv("TMPDIR", "/tmp")) / "sonny-services" / "locks" / "qwen3-tts-server.pid"
 
 EMOTION_INSTRUCTIONS = {
@@ -49,6 +50,11 @@ EMOTION_INSTRUCTIONS = {
 
 _TRACE_START: dict[str, float] = {}
 _STREAM_END = object()
+
+
+def log_tts_timing(message: str, *args) -> None:
+    if TTS_TIMING_ENABLED:
+        LOGGER.info(message, *args)
 
 
 class SynthesizeRequest(BaseModel):
@@ -96,7 +102,7 @@ class Qwen3TTSService:
         chunk_count = 0
         t0 = _TRACE_START.get(trace_id, time.perf_counter())
         model = self.ensure_model()
-        LOGGER.info(
+        log_tts_timing(
             "[tts-timing] trace=%s event=model_ready t=%.1fms",
             trace_id,
             (time.perf_counter() - t0) * 1000,
@@ -112,7 +118,7 @@ class Qwen3TTSService:
         voice = request.speaker or request.voice or DEFAULT_SPEAKER
 
         with self._generate_lock:
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=inference_started api=batch_generate text_len=%d voice=%s speaker=%s emotion=%s streaming_interval=%.2f t=%.1fms",
                 trace_id,
                 len(request.text),
@@ -131,7 +137,7 @@ class Qwen3TTSService:
                 stream=True,
                 streaming_interval=DEFAULT_STREAMING_INTERVAL,
             )
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=batch_generate_call_returned type=%s t=%.1fms",
                 trace_id,
                 type(results).__name__,
@@ -149,7 +155,7 @@ class Qwen3TTSService:
                 since_call_ms = (now - t_before_generate) * 1000
                 sample_rate = int(getattr(result, "sample_rate", 0) or 0)
                 is_final_chunk = getattr(result, "is_final_chunk", None)
-                LOGGER.info(
+                log_tts_timing(
                     "[tts-timing] trace=%s event=batch_generate_yield idx=%d samples=%d sample_rate=%s has_audio_chunk=%s has_audio=%s has_is_final_chunk=%s is_final_chunk=%s since_call=%.1fms delta=%.1fms t=%.1fms",
                     trace_id,
                     yield_index,
@@ -173,7 +179,7 @@ class Qwen3TTSService:
                     raise RuntimeError("Streaming result did not include a sample rate")
 
                 if not first_non_empty_logged:
-                    LOGGER.info(
+                    log_tts_timing(
                         "[tts-timing] trace=%s event=first_chunk_generated samples=%d t=%.1fms",
                         trace_id,
                         int(chunk.size),
@@ -184,7 +190,7 @@ class Qwen3TTSService:
                 if not header_sent:
                     yield build_streaming_wav_header(sample_rate=sample_rate)
                     header_sent = True
-                    LOGGER.info(
+                    log_tts_timing(
                         "[tts-timing] trace=%s event=first_chunk_sent t=%.1fms",
                         trace_id,
                         (time.perf_counter() - t0) * 1000,
@@ -198,7 +204,7 @@ class Qwen3TTSService:
                 chunk_count += 1
                 yield pcm.tobytes()
 
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=inference_finished total_yields=%d chunks=%d t=%.1fms",
                 trace_id,
                 yield_index,
@@ -209,7 +215,7 @@ class Qwen3TTSService:
         if not header_sent:
             raise RuntimeError("Model did not return any audio")
 
-        LOGGER.info(
+        log_tts_timing(
             "[tts-timing] trace=%s event=full_synth_sent chunks=%d t=%.1fms",
             trace_id,
             chunk_count,
@@ -223,7 +229,7 @@ class Qwen3TTSService:
     ) -> tuple[list[np.ndarray], int]:
         t0 = _TRACE_START.get(trace_id, time.perf_counter())
         model = self.ensure_model()
-        LOGGER.info(
+        log_tts_timing(
             "[tts-timing] trace=%s event=model_ready t=%.1fms",
             trace_id,
             (time.perf_counter() - t0) * 1000,
@@ -245,7 +251,7 @@ class Qwen3TTSService:
         sample_rate: int | None = None
 
         with self._generate_lock:
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=inference_started text_len=%d voice=%s speaker=%s emotion=%s t=%.1fms",
                 trace_id,
                 len(request.text),
@@ -264,7 +270,7 @@ class Qwen3TTSService:
                 )
                 results = model.generate(text=request.text)
 
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=generate_call_returned type=%s t=%.1fms",
                 trace_id,
                 type(results).__name__,
@@ -280,7 +286,7 @@ class Qwen3TTSService:
                 chunk = np.asarray(result.audio, dtype=np.float32)
                 delta_ms = (now - last_yield_ts) * 1000
                 since_call_ms = (now - t_before_generate) * 1000
-                LOGGER.info(
+                log_tts_timing(
                     "[tts-timing] trace=%s event=generate_yield idx=%d samples=%d sample_rate=%s since_call=%.1fms delta=%.1fms t=%.1fms",
                     trace_id,
                     yield_index,
@@ -297,7 +303,7 @@ class Qwen3TTSService:
                     continue
 
                 if not first_non_empty_logged:
-                    LOGGER.info(
+                    log_tts_timing(
                         "[tts-timing] trace=%s event=first_chunk_generated samples=%d t=%.1fms",
                         trace_id,
                         int(chunk.size),
@@ -308,7 +314,7 @@ class Qwen3TTSService:
                 chunks.append(chunk)
                 sample_rate = int(result.sample_rate)
 
-            LOGGER.info(
+            log_tts_timing(
                 "[tts-timing] trace=%s event=inference_finished total_yields=%d chunks=%d t=%.1fms",
                 trace_id,
                 yield_index,
@@ -440,7 +446,7 @@ async def warmup() -> dict[str, str]:
 @app.post("/synthesize")
 async def synthesize(request: SynthesizeRequest) -> Response:
     trace_id = _new_trace()
-    LOGGER.info(
+    log_tts_timing(
         "[tts-timing] trace=%s event=request_received endpoint=/synthesize text_len=%d voice=%s",
         trace_id,
         len(request.text),
@@ -465,7 +471,7 @@ async def synthesize(request: SynthesizeRequest) -> Response:
 @app.post("/synthesize/stream")
 async def synthesize_stream(request: SynthesizeRequest) -> StreamingResponse:
     trace_id = _new_trace()
-    LOGGER.info(
+    log_tts_timing(
         "[tts-timing] trace=%s event=request_received endpoint=/synthesize/stream text_len=%d voice=%s",
         trace_id,
         len(request.text),

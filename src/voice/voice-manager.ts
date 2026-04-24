@@ -5,6 +5,7 @@ import {
   previewText,
 } from '../core/assistant-output-guard.js';
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
+import { debugLog, debugWarn } from '../core/debug-log.js';
 import { Gateway } from '../core/gateway.js';
 import { TimingTracker } from '../core/timing.js';
 import { PorcupineProvider } from './providers/porcupine.js';
@@ -846,7 +847,8 @@ export class VoiceManager {
       sourceModel: source.model,
     });
 
-    console.log(
+    debugLog(
+      'SONNY_GATEWAY_DEBUG',
       JSON.stringify({
         type: 'gateway_response_before_tts',
         sourceKind: 'model',
@@ -958,7 +960,8 @@ export class VoiceManager {
 
         const backoffMs = TTS_INITIAL_BACKOFF_MS * (2 ** (attempt - 1));
 
-        console.warn(
+        debugWarn(
+          'SONNY_TTS_DEBUG',
           `[voice] TTS synthesis failed (attempt ${attempt}/${TTS_MAX_FAILURES}, consecutive=${retryState.failures}). ` +
           `Retrying in ${backoffMs}ms: ${resolvedError.message}`,
         );
@@ -1206,7 +1209,7 @@ export class VoiceManager {
     const timingReport = this.pendingTimingTracker?.report();
 
     if (timingReport !== undefined && timingReport.length > 0) {
-      console.log(timingReport);
+      debugLog('SONNY_TIMING_DEBUG', timingReport);
     }
 
     this.pendingTimingTracker = undefined;

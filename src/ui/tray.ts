@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 import { type NativeImage, Tray, nativeImage } from 'electron';
 
+import { debugLog } from '../core/debug-log.js';
+
 export type TrayStatus = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 interface StatusStyle {
@@ -14,6 +16,7 @@ interface StatusStyle {
 
 const ICON_WIDTH = 20;
 const ICON_HEIGHT = 20;
+const UI_DEBUG_FLAG = 'SONNY_UI_DEBUG';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -67,7 +70,8 @@ export class TrayController {
 
     const image = this.createImage(this.status);
 
-    console.log(
+    debugLog(
+      UI_DEBUG_FLAG,
       `[tray] creating tray for status=${this.status} imageEmpty=${image.isEmpty()}`,
     );
 
@@ -137,7 +141,8 @@ export class TrayController {
     if (iconPath !== undefined) {
       const fileImage = nativeImage.createFromPath(iconPath);
 
-      console.log(
+      debugLog(
+        UI_DEBUG_FLAG,
         `[tray] using icon file at ${iconPath} imageEmpty=${fileImage.isEmpty()}`,
       );
 
@@ -152,7 +157,8 @@ export class TrayController {
 
     const image = nativeImage.createEmpty();
 
-    console.log(
+    debugLog(
+      UI_DEBUG_FLAG,
       `[tray] no tray icon file found, using nativeImage.createEmpty() fallback for status=${status} expectedPaths=${this.getExpectedIconPaths().join(', ')}`,
     );
 
@@ -167,7 +173,7 @@ export class TrayController {
     for (const iconPath of paths) {
       const exists = existsSync(iconPath);
 
-      console.log(`[tray] checked icon path ${iconPath} exists=${exists}`);
+      debugLog(UI_DEBUG_FLAG, `[tray] checked icon path ${iconPath} exists=${exists}`);
 
       if (exists) {
         return iconPath;
