@@ -611,7 +611,7 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `playbackStartedAt: ${pipeline.latency.timestamps.playbackStartedAt ?? 'Unknown'}`,
     `playbackFinishedAt: ${pipeline.latency.timestamps.playbackFinishedAt ?? 'Unknown'}`,
     '',
-    `sttLatencyMs: ${formatDuration(pipeline.latency.durations.sttLatencyMs)}`,
+    `sttFinalizeLatencyMs: ${formatDuration(pipeline.latency.durations.sttLatencyMs)}`,
     `silenceToFirstTokenMs: ${formatDuration(pipeline.latency.durations.silenceToFirstTokenMs)}`,
     `silenceToPlaybackFinishedMs: ${formatDuration(pipeline.latency.durations.silenceToPlaybackFinishedMs)}`,
     `gatewayToFirstTokenMs: ${formatDuration(pipeline.latency.durations.gatewayToFirstTokenMs)}`,

@@ -1453,7 +1453,7 @@ function LatencyGrid({ pipeline }: { pipeline: PipelineDebugInfo | null }) {
   }
 
   const metrics = [
-    ['STT', pipeline.latency.durations.sttLatencyMs],
+    ['STT Finalize', pipeline.latency.durations.sttLatencyMs],
     ['Gateway to 1st Token', pipeline.latency.durations.gatewayToFirstTokenMs],
     [
       'Gateway to 1st Sentence',

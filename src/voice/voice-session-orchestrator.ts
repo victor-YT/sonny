@@ -2433,10 +2433,12 @@ function computeLatencyDebug(
   timestamps: VoiceLatencyTimestamps;
   durations: VoiceLatencyDurations;
 } {
+  const postSpeechSttStartedAt = resolvePostSpeechSttStartedAt(timestamps);
+
   return {
     timestamps,
     durations: {
-      sttLatencyMs: diffMs(timestamps.sttStartedAt, timestamps.sttFinishedAt),
+      sttLatencyMs: diffMs(postSpeechSttStartedAt, timestamps.sttFinishedAt),
       silenceToFirstTokenMs: diffMs(
         timestamps.silenceDetectedAt,
         timestamps.firstTokenAt,
@@ -2470,14 +2472,23 @@ function computeLatencyDebug(
   };
 }
 
+function resolvePostSpeechSttStartedAt(
+  timestamps: VoiceLatencyTimestamps,
+): string | null {
+  return timestamps.stopListeningAt ?? timestamps.sttStartedAt;
+}
+
 function buildVoiceTurnTimeline(
   pipeline: VoicePipelineDebugInfo,
   snapshot: ReturnType<RuntimeStateStore['getSnapshot']>,
 ): VoiceTurnTimelineDebug {
+  const postSpeechSttStartedAt = resolvePostSpeechSttStartedAt(
+    pipeline.latency.timestamps,
+  );
   const timestamps: VoiceTurnTimelineTimestamps = {
     listeningStartedAt: pipeline.latency.timestamps.micStartAt,
     silenceDetectedAt: pipeline.latency.timestamps.silenceDetectedAt,
-    sttStartedAt: pipeline.latency.timestamps.sttStartedAt,
+    sttStartedAt: postSpeechSttStartedAt,
     sttFinishedAt: pipeline.latency.timestamps.sttFinishedAt,
     llmStartedAt: pipeline.latency.timestamps.gatewayStartedAt,
     firstTokenAt: pipeline.latency.timestamps.firstTokenAt,
