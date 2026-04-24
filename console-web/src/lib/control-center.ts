@@ -1,5 +1,7 @@
 export interface RuntimeServiceState {
+  name: string
   label: string
+  details: string | null
   online: boolean
   url: string | null
   checkedAt: string | null

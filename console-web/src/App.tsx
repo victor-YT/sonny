@@ -1338,7 +1338,14 @@ function ServiceHealthRow({
               service.online ? 'bg-emerald-500' : 'bg-muted-foreground/40',
             )}
           />
-          <span className="text-sm font-medium">{service.label}</span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium break-all">{service.label}</p>
+            {service.details ? (
+              <p className="text-xs text-muted-foreground break-all">
+                {service.details}
+              </p>
+            ) : null}
+          </div>
         </div>
         <span className="text-xs text-muted-foreground">{service.online ? '●' : '○'}</span>
       </div>

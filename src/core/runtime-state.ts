@@ -22,6 +22,7 @@ export type RuntimeLogLevel = 'info' | 'warn' | 'error';
 export interface RuntimeServiceHealth {
   name: RuntimeServiceName;
   label: string;
+  details: string | null;
   url: string | null;
   online: boolean;
   checkedAt: string | null;
@@ -76,7 +77,11 @@ export type RuntimeStateEvent =
 
 export interface RuntimeStateStoreConfig {
   currentSessionId?: string | null;
-  services?: Partial<Record<RuntimeServiceName, { label?: string; url?: string | null }>>;
+  services?: Partial<Record<RuntimeServiceName, {
+    label?: string;
+    details?: string | null;
+    url?: string | null;
+  }>>;
   logLimit?: number;
   conversationLimit?: number;
   clock?: () => Date;
@@ -477,6 +482,7 @@ export class RuntimeStateStore {
     return {
       name,
       label: config.services?.[name]?.label ?? SERVICE_LABELS[name],
+      details: config.services?.[name]?.details ?? null,
       url: config.services?.[name]?.url ?? null,
       online: false,
       checkedAt: null,

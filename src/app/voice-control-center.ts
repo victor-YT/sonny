@@ -42,25 +42,48 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
   });
   const voiceGateway = createVoiceGatewayFromEnvironment(gateway, process.env);
   const voiceEnvironmentConfig = readVoiceEnvironmentConfig(process.env);
+  const llmModelLabel = runtimeConfig.foregroundModel === runtimeConfig.backgroundModel
+    ? runtimeConfig.foregroundModel
+    : `${runtimeConfig.foregroundModel} / ${runtimeConfig.backgroundModel}`;
+  const llmProviderLabel =
+    runtimeConfig.foregroundLlmProvider === runtimeConfig.backgroundLlmProvider
+      ? runtimeConfig.foregroundLlmProvider
+      : `${runtimeConfig.foregroundLlmProvider} / ${runtimeConfig.backgroundLlmProvider}`;
+  const wakeWordLabel = runtimeConfig.voice.porcupine.url === undefined
+    ? 'disabled'
+    : 'openwakeword';
+  const wakeWordDetails = runtimeConfig.voice.porcupine.url === undefined
+    ? 'Wake Word'
+    : `Wake Word · ${runtimeConfig.voice.porcupine.wakeWords.join(', ')}`;
   const runtimeState = new RuntimeStateStore({
     currentSessionId: gateway.currentSession.id,
     services: {
       ollama: {
+        label: llmModelLabel,
+        details: `LLM · ${llmProviderLabel}`,
         url: `${runtimeConfig.ollama.baseUrl.replace(/\/+$/u, '')}/api/tags`,
       },
       stt: {
+        label: voiceGateway.manager.sttProviderName,
+        details: 'STT',
         url: `${runtimeConfig.voice.fasterWhisper.url.replace(/\/+$/u, '')}/health`,
       },
       tts: {
+        label: voiceGateway.manager.ttsProviderName,
+        details: `TTS${voiceEnvironmentConfig.ttsVoice ? ` · ${voiceEnvironmentConfig.ttsVoice}` : ''}`,
         url: `${runtimeConfig.voice.chatterbox.url.replace(/\/+$/u, '')}/health`,
       },
       wake_word: {
+        label: wakeWordLabel,
+        details: wakeWordDetails,
         url:
           runtimeConfig.voice.porcupine.url === undefined
             ? null
             : `${runtimeConfig.voice.porcupine.url.replace(/\/+$/u, '')}/health`,
       },
       vad: {
+        label: 'vad-server',
+        details: 'VAD',
         url: `${(voiceEnvironmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003').replace(/\/+$/u, '')}/health`,
       },
     },

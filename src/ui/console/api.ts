@@ -775,6 +775,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
       ollama: {
         name: 'ollama',
         label: 'Ollama',
+        details: null,
         url: null,
         online: false,
         checkedAt: null,
@@ -783,6 +784,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
       stt: {
         name: 'stt',
         label: 'Whisper STT',
+        details: null,
         url: null,
         online: false,
         checkedAt: null,
@@ -791,6 +793,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
       tts: {
         name: 'tts',
         label: 'Qwen3-TTS',
+        details: null,
         url: null,
         online: false,
         checkedAt: null,
@@ -799,6 +802,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
       wake_word: {
         name: 'wake_word',
         label: 'Wake Word',
+        details: null,
         url: null,
         online: false,
         checkedAt: null,
@@ -807,6 +811,7 @@ function readRuntimeState(runtimeState: RuntimeStateStore | undefined) {
       vad: {
         name: 'vad',
         label: 'VAD',
+        details: null,
         url: null,
         online: false,
         checkedAt: null,
