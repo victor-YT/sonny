@@ -55,6 +55,12 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
   const wakeWordDetails = runtimeConfig.voice.porcupine.url === undefined
     ? 'Wake Word'
     : `Wake Word · ${runtimeConfig.voice.porcupine.wakeWords.join(', ')}`;
+  const sttHealthUrl = runtimeConfig.sttProvider === 'faster-whisper'
+    ? `${runtimeConfig.voice.fasterWhisper.url.replace(/\/+$/u, '')}/health`
+    : null;
+  const sttDetails = runtimeConfig.sttProvider === 'sherpa-onnx'
+    ? `STT · sherpa-onnx · ${runtimeConfig.voice.sherpaOnnx.modelType ?? 'auto'}`
+    : 'STT';
   const runtimeState = new RuntimeStateStore({
     currentSessionId: gateway.currentSession.id,
     services: {
@@ -65,8 +71,8 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
       },
       stt: {
         label: voiceGateway.manager.sttProviderName,
-        details: 'STT',
-        url: `${runtimeConfig.voice.fasterWhisper.url.replace(/\/+$/u, '')}/health`,
+        details: sttDetails,
+        url: sttHealthUrl,
       },
       tts: {
         label: voiceGateway.manager.ttsProviderName,

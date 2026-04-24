@@ -8,7 +8,7 @@ The voice runtime has one primary turn shape:
 
 1. `Listening`: capture microphone PCM at 16 kHz mono.
 2. `Silence Detected`: VAD marks end-of-turn after speech has started and enough trailing silence has accumulated.
-3. `STT`: faster-whisper receives either a live PCM stream or a finalized WAV buffer and returns a final transcript.
+3. `STT`: sherpa-onnx consumes live PCM chunks by default, emits partial transcripts, and returns a final transcript after end-of-turn. faster-whisper remains available as a fallback provider.
 4. `LLM`: `Gateway.streamChat()` sends the transcript through prompt/context/memory and streams assistant text.
 5. `TTS`: streamed assistant text is segmented into spoken sentences and sent to Qwen3-TTS.
 6. `Playback`: synthesized audio is queued and played by the system speaker.
@@ -27,7 +27,7 @@ The runtime should prefer streaming between stages, but correctness wins over la
 
 Provider interfaces live under `src/voice/providers/` and `src/core/providers/`.
 
-- `SttProvider`: owns transcript extraction and STT debug information. The default implementation is `FasterWhisperProvider`.
+- `SttProvider`: owns transcript extraction and STT debug information. The default implementation is `SherpaOnnxProvider`; `FasterWhisperProvider` remains selectable with `SONNY_STT_PROVIDER=faster-whisper`.
 - `TtsProvider`: owns text-to-audio synthesis. The default implementation is `Qwen3TTSProvider` in `chatterbox.ts`; the compatibility file name is historical.
 - `PlaybackProvider`: owns adding synthesized audio to playback. The default implementation is `SystemPlaybackProvider`.
 - `WakeWordProvider`: owns wake word events. Current local service implementation is `PorcupineProvider`, but its runtime name is `openwakeword`.
@@ -90,10 +90,14 @@ Useful manual checks:
 ```bash
 pnpm voice:providers
 pnpm voice:simulate
+pnpm stt:sherpa:test -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
+pnpm stt:benchmark -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
 pnpm start
 ```
 
 `pnpm voice:simulate` validates STT, LLM, TTS, and playback with a sample file. It does not prove live microphone permissions or VAD behavior.
+
+Use `pnpm run stt:sherpa:model` to download the default sherpa-onnx streaming Paraformer model before running sherpa smoke tests.
 
 ## Cleanup Rules
 

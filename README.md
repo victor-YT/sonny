@@ -102,7 +102,8 @@ Optional, but required for specific flows:
 
 - a Picovoice Porcupine access key only if you are working on wake-word flows
 - Electron-compatible desktop environment for the tray host
-- enough local CPU/GPU/RAM for `faster-whisper` and Qwen3-TTS
+- enough local CPU/RAM for `sherpa-onnx-node` realtime STT and Qwen3-TTS
+- enough local CPU/GPU/RAM for `faster-whisper` if you select the fallback STT provider
 
 On macOS with Homebrew:
 
@@ -156,6 +157,12 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_KEEP_ALIVE=-1
 PORCUPINE_ACCESS_KEY=replace-me
 FASTER_WHISPER_URL=http://127.0.0.1:8000
+SONNY_STT_PROVIDER=sherpa-onnx
+SHERPA_ONNX_MODEL_DIR=models/sherpa-onnx-streaming-paraformer-bilingual-zh-en
+SHERPA_ONNX_ENCODER=encoder.int8.onnx
+SHERPA_ONNX_DECODER=decoder.int8.onnx
+SHERPA_ONNX_TOKENS=tokens.txt
+SHERPA_ONNX_LANGUAGE=zh
 CHATTERBOX_URL=http://127.0.0.1:8001
 VAD_URL=http://127.0.0.1:8003
 SONNY_VOICE_MODE=0
@@ -166,26 +173,64 @@ Important values:
 - `OLLAMA_MODEL`: model name for chat generation
 - `OLLAMA_BASE_URL`: Ollama HTTP endpoint
 - `PORCUPINE_ACCESS_KEY`: required only for wake-word experiments
-- `FASTER_WHISPER_URL`: STT service URL
+- `SONNY_STT_PROVIDER`: `sherpa-onnx` by default; set `faster-whisper` for the fallback HTTP STT service
+- `SHERPA_ONNX_MODEL_DIR`: local sherpa-onnx streaming model directory
+- `SHERPA_ONNX_ENCODER`, `SHERPA_ONNX_DECODER`, `SHERPA_ONNX_JOINER`, `SHERPA_ONNX_TOKENS`: model asset paths; relative values are resolved under `SHERPA_ONNX_MODEL_DIR`
+- `SHERPA_ONNX_LANGUAGE`: language hint stored in STT results, default `zh`
+- `FASTER_WHISPER_URL`: fallback STT service URL when `SONNY_STT_PROVIDER=faster-whisper`
 - `CHATTERBOX_URL`: TTS service URL
 - `VAD_URL`: end-of-turn VAD service URL
 - `SONNY_VOICE_MODE`: `0`/`false` for non-voice startup, `1`/`true` for voice runtime startup
 
 `config/config.json` controls memory retention, skill permissions, and default voice service URLs. Keep `.env` for machine-specific startup values and `.local/` for machine-local runtime data.
 
-### Python Services Setup
+### Local Voice Services Setup
 
-Sonny expects three local HTTP services for voice mode and starts them automatically when they are not already healthy:
+Sonny uses `sherpa-onnx-node` as the default in-process realtime STT provider. Voice mode still expects local HTTP services for TTS and VAD, and starts them automatically when they are not already healthy:
 
-- faster-whisper on `http://127.0.0.1:8000`
 - Qwen3-TTS on `http://127.0.0.1:8001`
 - VAD on `http://127.0.0.1:8003`
 
 The runtime still uses the compatibility name `CHATTERBOX_URL` for the TTS endpoint, but the bundled server script is `scripts/qwen3-tts-server.py`.
 
-#### STT: faster-whisper
+#### STT: sherpa-onnx
 
 ```bash
+pnpm run stt:sherpa:model
+pnpm run stt:sherpa:test -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
+```
+
+The bundled downloader installs the recommended streaming Mandarin + English int8 Paraformer model under:
+
+```text
+models/sherpa-onnx-streaming-paraformer-bilingual-zh-en
+```
+
+Default sherpa-onnx settings:
+
+```env
+SONNY_STT_PROVIDER=sherpa-onnx
+SHERPA_ONNX_MODEL_DIR=models/sherpa-onnx-streaming-paraformer-bilingual-zh-en
+SHERPA_ONNX_ENCODER=encoder.int8.onnx
+SHERPA_ONNX_DECODER=decoder.int8.onnx
+SHERPA_ONNX_TOKENS=tokens.txt
+SHERPA_ONNX_LANGUAGE=zh
+SHERPA_ONNX_MODEL_TYPE=paraformer
+SHERPA_ONNX_PROVIDER=cpu
+SHERPA_ONNX_NUM_THREADS=2
+```
+
+For a transducer model, also set:
+
+```env
+SHERPA_ONNX_JOINER=joiner.int8.onnx
+SHERPA_ONNX_MODEL_TYPE=transducer
+```
+
+#### STT fallback: faster-whisper
+
+```bash
+SONNY_STT_PROVIDER=faster-whisper
 python3 -m venv .venv
 source .venv/bin/activate
 pip install fastapi uvicorn faster-whisper python-multipart
@@ -266,8 +311,8 @@ Set `SONNY_CONSOLE_PORT` if you need a different localhost port.
 Before starting voice mode:
 
 1. Set `SONNY_VOICE_MODE=1` in `.env`.
-2. Start faster-whisper and Qwen3-TTS.
-3. Verify `FASTER_WHISPER_URL` and `CHATTERBOX_URL` match the services you started.
+2. Run `pnpm run stt:sherpa:model` once to download the default sherpa-onnx model.
+3. Verify `SHERPA_ONNX_MODEL_DIR` points at the downloaded model and `CHATTERBOX_URL` matches the TTS service.
 4. Open the localhost control center.
 
 Then start Sonny normally:
@@ -280,7 +325,7 @@ In voice mode Sonny:
 
 1. runs the voice runtime locally
 2. accepts manual or simulated voice turns through the control center
-3. transcribes with faster-whisper
+3. transcribes with sherpa-onnx realtime STT by default
 4. generates a response with the gateway
 5. reshapes the response for speech
 6. synthesizes streamed audio with Qwen3-TTS
@@ -297,6 +342,15 @@ Optional voice-related environment overrides supported by `src/voice/voice-gatew
 - `SONNY_FOREGROUND_MODEL`
 - `SONNY_BACKGROUND_MODEL`
 - `SONNY_STT_LANGUAGE`
+- `SHERPA_ONNX_MODEL_DIR`
+- `SHERPA_ONNX_ENCODER`
+- `SHERPA_ONNX_DECODER`
+- `SHERPA_ONNX_JOINER`
+- `SHERPA_ONNX_TOKENS`
+- `SHERPA_ONNX_LANGUAGE`
+- `SHERPA_ONNX_MODEL_TYPE`
+- `SHERPA_ONNX_PROVIDER`
+- `SHERPA_ONNX_NUM_THREADS`
 - `SONNY_TTS_VOICE`
 - `SONNY_WAKE_WORD_SENSITIVITY`
 - `SONNY_MIC_SAMPLE_RATE_HERTZ`

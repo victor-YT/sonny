@@ -9,6 +9,7 @@ export interface StartupEnvironment {
   backgroundModel?: string;
   ollamaBaseUrl?: string;
   voiceMode: boolean;
+  sttProvider: string;
   wakeWordUrl?: string;
   fasterWhisperUrl?: string;
   chatterboxUrl?: string;
@@ -46,6 +47,10 @@ export function loadStartupEnvironment(
     issues,
   );
   const voiceMode = readOptionalBoolean(environment, 'SONNY_VOICE_MODE') ?? false;
+  const sttProvider = readOptionalEnv(
+    environment,
+    ['SONNY_STT_PROVIDER'],
+  ) ?? 'sherpa-onnx';
 
   let wakeWordUrl: string | undefined;
   let fasterWhisperUrl: string | undefined;
@@ -58,12 +63,21 @@ export function loadStartupEnvironment(
       'WAKE_WORD_URL',
       issues,
     );
-    fasterWhisperUrl = readRequiredUrl(
-      environment,
-      ['FASTER_WHISPER_URL', 'SONNY_STT_BASE_URL'],
-      'FASTER_WHISPER_URL',
-      issues,
-    );
+    if (sttProvider === 'faster-whisper') {
+      fasterWhisperUrl = readRequiredUrl(
+        environment,
+        ['FASTER_WHISPER_URL', 'SONNY_STT_BASE_URL'],
+        'FASTER_WHISPER_URL',
+        issues,
+      );
+    } else {
+      fasterWhisperUrl = readOptionalUrl(
+        environment,
+        ['FASTER_WHISPER_URL', 'SONNY_STT_BASE_URL'],
+        'FASTER_WHISPER_URL',
+        issues,
+      );
+    }
     chatterboxUrl = readRequiredUrl(
       environment,
       ['CHATTERBOX_URL', 'SONNY_TTS_BASE_URL'],
@@ -82,6 +96,7 @@ export function loadStartupEnvironment(
     backgroundModel,
     ollamaBaseUrl,
     voiceMode,
+    sttProvider,
     wakeWordUrl,
     fasterWhisperUrl,
     chatterboxUrl,

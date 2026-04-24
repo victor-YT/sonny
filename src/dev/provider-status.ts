@@ -6,6 +6,11 @@ function main(): void {
 
   const lines = [
     `STT Provider: ${runtimeConfig.sttProvider}`,
+    `Sherpa ONNX Model Dir: ${runtimeConfig.voice.sherpaOnnx.modelDir ?? 'not configured'}`,
+    `Sherpa ONNX Model Type: ${runtimeConfig.voice.sherpaOnnx.modelType ?? 'auto'}`,
+    `Sherpa ONNX Provider: ${runtimeConfig.voice.sherpaOnnx.provider ?? 'cpu'}`,
+    `Sherpa ONNX Threads: ${String(runtimeConfig.voice.sherpaOnnx.numThreads ?? 2)}`,
+    `Faster Whisper URL: ${runtimeConfig.voice.fasterWhisper.url}`,
     `Foreground LLM Provider: ${runtimeConfig.foregroundLlmProvider}`,
     `Background LLM Provider: ${runtimeConfig.backgroundLlmProvider}`,
     `TTS Provider: ${runtimeConfig.ttsProvider}`,

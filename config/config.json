@@ -7,6 +7,17 @@
     "fasterWhisper": {
       "url": "http://127.0.0.1:8000"
     },
+    "sherpaOnnx": {
+      "modelDir": "models/sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+      "encoder": "encoder.int8.onnx",
+      "decoder": "decoder.int8.onnx",
+      "tokens": "tokens.txt",
+      "language": "zh",
+      "modelType": "paraformer",
+      "provider": "cpu",
+      "numThreads": 2,
+      "decodingMethod": "greedy_search"
+    },
     "chatterbox": {
       "url": "http://127.0.0.1:8001"
     },
@@ -45,5 +56,6 @@
         "maxLevel": "low"
       }
     }
-  }
+  },
+  "sttProvider": "sherpa-onnx"
 }

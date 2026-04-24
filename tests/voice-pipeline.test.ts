@@ -12,6 +12,7 @@ import {
   extractTranscriptFromWhisperPayload,
   FasterWhisperProvider,
 } from '../src/voice/providers/faster-whisper.js';
+import { SherpaOnnxProvider } from '../src/voice/providers/sherpa-onnx.js';
 
 async function startServer(
   handler: (request: IncomingMessage, response: ServerResponse) => Promise<void> | void,
@@ -134,6 +135,19 @@ test('FasterWhisperProvider sends audio bytes and parses JSON transcripts', asyn
   } finally {
     await server.close();
   }
+});
+
+test('SherpaOnnxProvider reports missing model assets clearly', () => {
+  assert.throws(
+    () => new SherpaOnnxProvider({
+      modelDir: '.local/missing-sherpa-model',
+      encoder: 'encoder.int8.onnx',
+      decoder: 'decoder.int8.onnx',
+      tokens: 'tokens.txt',
+      modelType: 'paraformer',
+    }),
+    /stt_model_missing: sherpa-onnx model assets are missing/u,
+  );
 });
 
 test('FasterWhisperProvider streams NDJSON transcript updates', async () => {

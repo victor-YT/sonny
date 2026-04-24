@@ -17,6 +17,19 @@ export interface FasterWhisperRuntimeConfig {
   url: string;
 }
 
+export interface SherpaOnnxRuntimeConfig {
+  modelDir?: string;
+  encoder?: string;
+  decoder?: string;
+  joiner?: string;
+  tokens?: string;
+  language?: string;
+  modelType?: 'auto' | 'transducer' | 'paraformer';
+  provider?: string;
+  numThreads?: number;
+  decodingMethod?: string;
+}
+
 export interface ChatterboxRuntimeConfig {
   url: string;
 }
@@ -30,6 +43,7 @@ export interface PorcupineRuntimeConfig {
 
 export interface VoiceRuntimeConfig {
   fasterWhisper: FasterWhisperRuntimeConfig;
+  sherpaOnnx: SherpaOnnxRuntimeConfig;
   chatterbox: ChatterboxRuntimeConfig;
   porcupine: PorcupineRuntimeConfig;
 }
@@ -67,6 +81,7 @@ export interface RuntimeConfigUpdate {
   ollama?: Partial<OllamaRuntimeConfig>;
   voice?: {
     fasterWhisper?: Partial<FasterWhisperRuntimeConfig>;
+    sherpaOnnx?: Partial<SherpaOnnxRuntimeConfig>;
     chatterbox?: Partial<ChatterboxRuntimeConfig>;
     porcupine?: Partial<PorcupineRuntimeConfig>;
   };
@@ -169,6 +184,7 @@ function applyRuntimeConfigUpdate(
 ): Record<string, unknown> {
   const voice = isRecord(current.voice) ? current.voice : {};
   const fasterWhisper = isRecord(voice.fasterWhisper) ? voice.fasterWhisper : {};
+  const sherpaOnnx = isRecord(voice.sherpaOnnx) ? voice.sherpaOnnx : {};
   const chatterbox = isRecord(voice.chatterbox) ? voice.chatterbox : {};
   const porcupine = isRecord(voice.porcupine) ? voice.porcupine : {};
   const ollama = isRecord(current.ollama) ? current.ollama : {};
@@ -185,6 +201,10 @@ function applyRuntimeConfigUpdate(
       fasterWhisper: {
         ...fasterWhisper,
         ...update.voice?.fasterWhisper,
+      },
+      sherpaOnnx: {
+        ...sherpaOnnx,
+        ...update.voice?.sherpaOnnx,
       },
       chatterbox: {
         ...chatterbox,

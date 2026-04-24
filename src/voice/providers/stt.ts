@@ -5,7 +5,9 @@ export type SttFailureReason =
   | 'stt_invalid_json'
   | 'stt_unrecognized_payload_shape'
   | 'stt_empty_transcript'
-  | 'stt_empty_audio';
+  | 'stt_empty_audio'
+  | 'stt_model_missing'
+  | 'stt_provider_unavailable';
 
 export interface SttDebugInfo {
   requestUrl: string | null;
@@ -24,6 +26,18 @@ export interface SttDebugInfo {
   firstNonEmptyChunkReceived?: boolean | null;
   endedBeforeFirstChunk?: boolean | null;
   sttRequestSkippedBecauseEmpty?: boolean | null;
+  providerName?: string | null;
+  modelType?: string | null;
+  modelDir?: string | null;
+  modelProvider?: string | null;
+  numThreads?: number | null;
+  firstPartialAt?: string | null;
+  finalTranscriptAt?: string | null;
+  firstPartialLatencyMs?: number | null;
+  finalTranscriptLatencyMs?: number | null;
+  totalLatencyMs?: number | null;
+  partialsEmitted?: boolean | null;
+  partialCount?: number | null;
 }
 
 export interface SttResult {

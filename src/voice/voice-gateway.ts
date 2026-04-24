@@ -345,16 +345,18 @@ export class VoiceGateway {
       return;
     }
 
-    await this.startHttpService({
-      name: 'whisper',
-      scriptPath: WHISPER_SERVER_SCRIPT,
-      healthUrl: `${normalizeBaseUrl(
-        this.environmentConfig.sttBaseUrl ?? 'http://127.0.0.1:8000',
-      )}/health`,
-      environment: toWhisperEnvironment(
-        this.environmentConfig.sttBaseUrl ?? 'http://127.0.0.1:8000',
-      ),
-    });
+    if (this.manager.sttProviderName === 'faster-whisper') {
+      await this.startHttpService({
+        name: 'whisper',
+        scriptPath: WHISPER_SERVER_SCRIPT,
+        healthUrl: `${normalizeBaseUrl(
+          this.environmentConfig.sttBaseUrl ?? 'http://127.0.0.1:8000',
+        )}/health`,
+        environment: toWhisperEnvironment(
+          this.environmentConfig.sttBaseUrl ?? 'http://127.0.0.1:8000',
+        ),
+      });
+    }
 
     await this.startHttpService({
       name: 'tts',
@@ -546,6 +548,7 @@ export function createVoiceGatewayFromEnvironment(
         fasterWhisper: {
           url: config.sttBaseUrl ?? runtimeConfig.voice.fasterWhisper.url,
         },
+        sherpaOnnx: runtimeConfig.voice.sherpaOnnx,
         chatterbox: {
           url: config.ttsBaseUrl ?? runtimeConfig.voice.chatterbox.url,
         },

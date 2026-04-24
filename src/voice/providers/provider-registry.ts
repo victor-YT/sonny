@@ -1,5 +1,6 @@
 import type { RuntimeConfig } from '../../core/config.js';
 import { FasterWhisperProvider } from './faster-whisper.js';
+import { SherpaOnnxProvider } from './sherpa-onnx.js';
 import type { PlaybackProvider } from './playback.js';
 import type { SttProvider } from './stt.js';
 import { SystemPlaybackProvider } from './system-playback.js';
@@ -9,6 +10,8 @@ import type { StreamingAudioQueue } from '../streaming-audio-queue.js';
 
 export function createConfiguredSttProvider(runtimeConfig: RuntimeConfig): SttProvider {
   switch (runtimeConfig.sttProvider) {
+    case 'sherpa-onnx':
+      return new SherpaOnnxProvider(runtimeConfig.voice.sherpaOnnx);
     case 'faster-whisper':
       return new FasterWhisperProvider({
         baseUrl: runtimeConfig.voice.fasterWhisper.url,

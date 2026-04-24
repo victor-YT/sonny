@@ -97,6 +97,18 @@ export interface SttDebugInfo {
   firstNonEmptyChunkReceived?: boolean | null
   endedBeforeFirstChunk?: boolean | null
   sttRequestSkippedBecauseEmpty?: boolean | null
+  providerName?: string | null
+  modelType?: string | null
+  modelDir?: string | null
+  modelProvider?: string | null
+  numThreads?: number | null
+  firstPartialAt?: string | null
+  finalTranscriptAt?: string | null
+  firstPartialLatencyMs?: number | null
+  finalTranscriptLatencyMs?: number | null
+  totalLatencyMs?: number | null
+  partialsEmitted?: boolean | null
+  partialCount?: number | null
 }
 
 export interface PipelineLatencyTimestamps {
@@ -581,6 +593,18 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `sttFirstNonEmptyChunkReceived: ${String(pipeline.sttDebug.firstNonEmptyChunkReceived ?? 'Unknown')}`,
     `sttEndedBeforeFirstChunk: ${String(pipeline.sttDebug.endedBeforeFirstChunk ?? 'Unknown')}`,
     `sttRequestSkippedBecauseEmpty: ${String(pipeline.sttDebug.sttRequestSkippedBecauseEmpty ?? 'Unknown')}`,
+    `sttProviderName: ${pipeline.sttDebug.providerName ?? 'Unknown'}`,
+    `sttModelType: ${pipeline.sttDebug.modelType ?? 'Unknown'}`,
+    `sttModelDir: ${pipeline.sttDebug.modelDir ?? 'Unknown'}`,
+    `sttModelProvider: ${pipeline.sttDebug.modelProvider ?? 'Unknown'}`,
+    `sttNumThreads: ${String(pipeline.sttDebug.numThreads ?? 'Unknown')}`,
+    `sttFirstPartialAt: ${pipeline.sttDebug.firstPartialAt ?? 'Unknown'}`,
+    `sttFinalTranscriptAt: ${pipeline.sttDebug.finalTranscriptAt ?? 'Unknown'}`,
+    `sttFirstPartialLatencyMs: ${formatDuration(pipeline.sttDebug.firstPartialLatencyMs ?? null)}`,
+    `sttFinalTranscriptLatencyMs: ${formatDuration(pipeline.sttDebug.finalTranscriptLatencyMs ?? null)}`,
+    `sttTotalLatencyMs: ${formatDuration(pipeline.sttDebug.totalLatencyMs ?? null)}`,
+    `sttPartialsEmitted: ${String(pipeline.sttDebug.partialsEmitted ?? 'Unknown')}`,
+    `sttPartialCount: ${String(pipeline.sttDebug.partialCount ?? 'Unknown')}`,
     `endOfTurnReason: ${pipeline.endOfTurnReason ?? 'Unknown'}`,
     '',
     `timelineCurrentState: ${pipeline.turnTimeline.currentState}`,
@@ -660,9 +684,21 @@ export function buildSttDebug(pipeline: PipelineDebugInfo | null): string {
     `Transcript Length: ${String(pipeline.sttDebug.transcriptLength ?? 'Unknown')}`,
     `Transcript: ${pipeline.sttDebug.transcript ?? 'None'}`,
     `Failure Reason: ${pipeline.sttDebug.failureReason ?? 'None'}`,
+    `Provider Name: ${pipeline.sttDebug.providerName ?? 'Unknown'}`,
+    `Model Type: ${pipeline.sttDebug.modelType ?? 'Unknown'}`,
+    `Model Dir: ${pipeline.sttDebug.modelDir ?? 'Unknown'}`,
+    `Model Provider: ${pipeline.sttDebug.modelProvider ?? 'Unknown'}`,
+    `Num Threads: ${String(pipeline.sttDebug.numThreads ?? 'Unknown')}`,
     `Stream Bytes Sent: ${String(pipeline.sttDebug.streamBytesSent ?? 'Unknown')}`,
     `Stream Non-Empty Chunks: ${String(pipeline.sttDebug.streamNonEmptyChunkCount ?? 'Unknown')}`,
     `Stream First Chunk At: ${pipeline.sttDebug.streamFirstChunkAt ?? 'Unknown'}`,
+    `First Partial At: ${pipeline.sttDebug.firstPartialAt ?? 'Unknown'}`,
+    `Final Transcript At: ${pipeline.sttDebug.finalTranscriptAt ?? 'Unknown'}`,
+    `First Partial Latency: ${formatDuration(pipeline.sttDebug.firstPartialLatencyMs ?? null)}`,
+    `Final Transcript Latency: ${formatDuration(pipeline.sttDebug.finalTranscriptLatencyMs ?? null)}`,
+    `Total STT Latency: ${formatDuration(pipeline.sttDebug.totalLatencyMs ?? null)}`,
+    `Partials Emitted: ${String(pipeline.sttDebug.partialsEmitted ?? 'Unknown')}`,
+    `Partial Count: ${String(pipeline.sttDebug.partialCount ?? 'Unknown')}`,
     `Stream Closed Before First Chunk: ${String(pipeline.sttDebug.streamClosedBeforeFirstChunk ?? 'Unknown')}`,
     `Capture Ended By: ${pipeline.sttDebug.captureEndedBy ?? 'Unknown'}`,
     `First Non-Empty Chunk Received: ${String(pipeline.sttDebug.firstNonEmptyChunkReceived ?? 'Unknown')}`,

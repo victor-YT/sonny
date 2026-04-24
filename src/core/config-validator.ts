@@ -31,6 +31,12 @@ export function validateConfig(value: unknown): RuntimeConfig {
     issues,
     'fasterWhisper',
   );
+  const sherpaOnnx = readOptionalRecord(
+    voice,
+    'config.voice.sherpaOnnx',
+    issues,
+    'sherpaOnnx',
+  );
   const chatterbox = expectNestedRecord(
     voice,
     'config.voice.chatterbox',
@@ -54,6 +60,63 @@ export function validateConfig(value: unknown): RuntimeConfig {
     voice: {
       fasterWhisper: {
         url: readUrl(fasterWhisper, 'config.voice.fasterWhisper.url', issues, 'url'),
+      },
+      sherpaOnnx: {
+        modelDir: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.modelDir',
+          issues,
+          'modelDir',
+        ),
+        encoder: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.encoder',
+          issues,
+          'encoder',
+        ),
+        decoder: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.decoder',
+          issues,
+          'decoder',
+        ),
+        joiner: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.joiner',
+          issues,
+          'joiner',
+        ),
+        tokens: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.tokens',
+          issues,
+          'tokens',
+        ),
+        language: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.language',
+          issues,
+          'language',
+        ),
+        modelType: readOptionalSherpaModelType(sherpaOnnx, issues),
+        provider: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.provider',
+          issues,
+          'provider',
+        ),
+        numThreads: readOptionalPositiveInteger(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.numThreads',
+          issues,
+          'numThreads',
+        ),
+        decodingMethod: readOptionalString(
+          sherpaOnnx,
+          'config.voice.sherpaOnnx.decodingMethod',
+          issues,
+          'decodingMethod',
+        ),
       },
       chatterbox: {
         url: readUrl(chatterbox, 'config.voice.chatterbox.url', issues, 'url'),
@@ -80,7 +143,7 @@ export function validateConfig(value: unknown): RuntimeConfig {
     },
     sttProvider:
       readOptionalString(root, 'config.sttProvider', issues, 'sttProvider') ??
-      'faster-whisper',
+      'sherpa-onnx',
     foregroundLlmProvider:
       readOptionalString(
         root,
@@ -299,7 +362,7 @@ function readOptionalPositiveInteger(
   issues: string[],
   ...segments: string[]
 ): number | undefined {
-  const value = readNestedValue(root, path, issues, ...segments);
+  const value = readOptionalNestedValue(root, ...segments);
 
   if (value === undefined) {
     return undefined;
@@ -307,6 +370,29 @@ function readOptionalPositiveInteger(
 
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     issues.push(`${path} must be a positive integer when provided.`);
+    return undefined;
+  }
+
+  return value;
+}
+
+function readOptionalSherpaModelType(
+  root: Record<string, unknown> | undefined,
+  issues: string[],
+): RuntimeConfig['voice']['sherpaOnnx']['modelType'] {
+  const value = readOptionalString(
+    root,
+    'config.voice.sherpaOnnx.modelType',
+    issues,
+    'modelType',
+  );
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value !== 'auto' && value !== 'transducer' && value !== 'paraformer') {
+    issues.push('config.voice.sherpaOnnx.modelType must be auto, transducer, or paraformer.');
     return undefined;
   }
 
@@ -490,6 +576,21 @@ function expectNestedRecord(
   ...segments: string[]
 ): Record<string, unknown> | undefined {
   const value = readNestedValue(root, path, issues, ...segments);
+
+  return expectRecord(value, path, issues);
+}
+
+function readOptionalRecord(
+  root: Record<string, unknown> | undefined,
+  path: string,
+  issues: string[],
+  ...segments: string[]
+): Record<string, unknown> | undefined {
+  const value = readOptionalNestedValue(root, ...segments);
+
+  if (value === undefined) {
+    return undefined;
+  }
 
   return expectRecord(value, path, issues);
 }

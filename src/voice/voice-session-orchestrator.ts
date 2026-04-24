@@ -224,6 +224,18 @@ export interface VoicePipelineDebugInfo {
     firstNonEmptyChunkReceived: boolean | null;
     endedBeforeFirstChunk: boolean | null;
     sttRequestSkippedBecauseEmpty: boolean | null;
+    providerName: string | null;
+    modelType: string | null;
+    modelDir: string | null;
+    modelProvider: string | null;
+    numThreads: number | null;
+    firstPartialAt: string | null;
+    finalTranscriptAt: string | null;
+    firstPartialLatencyMs: number | null;
+    finalTranscriptLatencyMs: number | null;
+    totalLatencyMs: number | null;
+    partialsEmitted: boolean | null;
+    partialCount: number | null;
   };
   endOfTurnReason: 'silence' | 'max_timeout' | 'manual' | 'interrupted' | 'unknown' | null;
   playbackMode: 'streaming-stdin' | 'file-fallback' | 'unknown';
@@ -413,6 +425,18 @@ export class VoiceSessionOrchestrator {
           firstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
           endedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
           sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
+          providerName: debug?.providerName ?? null,
+          modelType: debug?.modelType ?? null,
+          modelDir: debug?.modelDir ?? null,
+          modelProvider: debug?.modelProvider ?? null,
+          numThreads: debug?.numThreads ?? null,
+          firstPartialAt: debug?.firstPartialAt ?? null,
+          finalTranscriptAt: debug?.finalTranscriptAt ?? null,
+          firstPartialLatencyMs: debug?.firstPartialLatencyMs ?? null,
+          finalTranscriptLatencyMs: debug?.finalTranscriptLatencyMs ?? null,
+          totalLatencyMs: debug?.totalLatencyMs ?? null,
+          partialsEmitted: debug?.partialsEmitted ?? null,
+          partialCount: debug?.partialCount ?? null,
         },
       };
     } catch (error: unknown) {
@@ -1141,10 +1165,7 @@ export class VoiceSessionOrchestrator {
   public async refreshHealth(): Promise<void> {
     await Promise.all([
       this.checkHealth('ollama', `${normalizeBaseUrl(this.runtimeConfig.ollama.baseUrl)}/api/tags`),
-      this.checkHealth(
-        'stt',
-        `${normalizeBaseUrl(this.runtimeConfig.voice.fasterWhisper.url)}/health`,
-      ),
+      this.checkSttHealth(),
       this.checkHealth(
         'tts',
         `${normalizeBaseUrl(this.runtimeConfig.voice.chatterbox.url)}/health`,
@@ -1158,6 +1179,40 @@ export class VoiceSessionOrchestrator {
         normalizeOptionalHealthUrl(this.environmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003'),
       ),
     ]);
+  }
+
+  private async checkSttHealth(): Promise<void> {
+    if (this.runtimeConfig.sttProvider === 'faster-whisper') {
+      await this.checkHealth(
+        'stt',
+        `${normalizeBaseUrl(this.runtimeConfig.voice.fasterWhisper.url)}/health`,
+      );
+      return;
+    }
+
+    this.runtimeState.setServiceHealth('stt', {
+      label: this.voiceGateway.manager.sttProviderName,
+      details: this.buildInProcessSttDetails(),
+      online: true,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    });
+  }
+
+  private buildInProcessSttDetails(): string {
+    if (this.runtimeConfig.sttProvider !== 'sherpa-onnx') {
+      return `STT · ${this.runtimeConfig.sttProvider}`;
+    }
+
+    const config = this.runtimeConfig.voice.sherpaOnnx;
+
+    return [
+      'STT',
+      'sherpa-onnx',
+      config.modelType ?? 'auto',
+      config.provider === undefined ? null : `provider=${config.provider}`,
+      config.numThreads === undefined ? null : `threads=${config.numThreads}`,
+    ].filter((value): value is string => value !== null).join(' · ');
   }
 
   private async ensureServicesReady(): Promise<void> {
@@ -1522,6 +1577,18 @@ export class VoiceSessionOrchestrator {
         firstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
         endedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
         sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
+        providerName: debug?.providerName ?? null,
+        modelType: debug?.modelType ?? null,
+        modelDir: debug?.modelDir ?? null,
+        modelProvider: debug?.modelProvider ?? null,
+        numThreads: debug?.numThreads ?? null,
+        firstPartialAt: debug?.firstPartialAt ?? null,
+        finalTranscriptAt: debug?.finalTranscriptAt ?? null,
+        firstPartialLatencyMs: debug?.firstPartialLatencyMs ?? null,
+        finalTranscriptLatencyMs: debug?.finalTranscriptLatencyMs ?? null,
+        totalLatencyMs: debug?.totalLatencyMs ?? null,
+        partialsEmitted: debug?.partialsEmitted ?? null,
+        partialCount: debug?.partialCount ?? null,
       },
       endOfTurnReason: this.recorderDebug.endOfTurnReason ?? null,
       updatedAt: new Date().toISOString(),
@@ -1646,6 +1713,16 @@ export class VoiceSessionOrchestrator {
       sttFirstNonEmptyChunkReceived: debug?.firstNonEmptyChunkReceived ?? null,
       sttEndedBeforeFirstChunk: debug?.endedBeforeFirstChunk ?? null,
       sttRequestSkippedBecauseEmpty: debug?.sttRequestSkippedBecauseEmpty ?? null,
+      sttProviderName: debug?.providerName ?? null,
+      sttModelType: debug?.modelType ?? null,
+      sttModelProvider: debug?.modelProvider ?? null,
+      sttFirstPartialAt: debug?.firstPartialAt ?? null,
+      sttFinalTranscriptAt: debug?.finalTranscriptAt ?? null,
+      sttFirstPartialLatencyMs: debug?.firstPartialLatencyMs ?? null,
+      sttFinalTranscriptLatencyMs: debug?.finalTranscriptLatencyMs ?? null,
+      sttTotalLatencyMs: debug?.totalLatencyMs ?? null,
+      sttPartialsEmitted: debug?.partialsEmitted ?? null,
+      sttPartialCount: debug?.partialCount ?? null,
     };
   }
 
@@ -2172,6 +2249,18 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       firstNonEmptyChunkReceived: null,
       endedBeforeFirstChunk: null,
       sttRequestSkippedBecauseEmpty: null,
+      providerName: null,
+      modelType: null,
+      modelDir: null,
+      modelProvider: null,
+      numThreads: null,
+      firstPartialAt: null,
+      finalTranscriptAt: null,
+      firstPartialLatencyMs: null,
+      finalTranscriptLatencyMs: null,
+      totalLatencyMs: null,
+      partialsEmitted: null,
+      partialCount: null,
     },
     endOfTurnReason: null,
     playbackMode: 'unknown',
@@ -2301,6 +2390,18 @@ function clonePipelineDebug(value: VoicePipelineDebugInfo): VoicePipelineDebugIn
       firstNonEmptyChunkReceived: value.sttDebug.firstNonEmptyChunkReceived,
       endedBeforeFirstChunk: value.sttDebug.endedBeforeFirstChunk,
       sttRequestSkippedBecauseEmpty: value.sttDebug.sttRequestSkippedBecauseEmpty,
+      providerName: value.sttDebug.providerName,
+      modelType: value.sttDebug.modelType,
+      modelDir: value.sttDebug.modelDir,
+      modelProvider: value.sttDebug.modelProvider,
+      numThreads: value.sttDebug.numThreads,
+      firstPartialAt: value.sttDebug.firstPartialAt,
+      finalTranscriptAt: value.sttDebug.finalTranscriptAt,
+      firstPartialLatencyMs: value.sttDebug.firstPartialLatencyMs,
+      finalTranscriptLatencyMs: value.sttDebug.finalTranscriptLatencyMs,
+      totalLatencyMs: value.sttDebug.totalLatencyMs,
+      partialsEmitted: value.sttDebug.partialsEmitted,
+      partialCount: value.sttDebug.partialCount,
     },
     endOfTurnReason: value.endOfTurnReason,
     playbackMode: value.playbackMode,
@@ -3296,6 +3397,14 @@ function classifySttError(message: string): string {
 
   if (message.startsWith('stt_empty_transcript:')) {
     return message.replace('stt_empty_transcript:', 'STT empty transcript:').trim();
+  }
+
+  if (message.startsWith('stt_model_missing:')) {
+    return message.replace('stt_model_missing:', 'STT model missing:').trim();
+  }
+
+  if (message.startsWith('stt_provider_unavailable:')) {
+    return message.replace('stt_provider_unavailable:', 'STT provider unavailable:').trim();
   }
 
   if (message.includes('timed out')) {

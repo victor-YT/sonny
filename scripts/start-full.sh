@@ -61,13 +61,16 @@ wait_for_health() {
   done
 }
 
+STT_PROVIDER="${SONNY_STT_PROVIDER:-sherpa-onnx}"
 STT_HEALTH_URL="$(normalize_base_url "${FASTER_WHISPER_URL:-http://127.0.0.1:8000}")/health"
 TTS_HEALTH_URL="$(normalize_base_url "${CHATTERBOX_URL:-http://127.0.0.1:8001}")/health"
 VAD_HEALTH_URL="$(normalize_base_url "${VAD_URL:-http://127.0.0.1:8003}")/health"
 STARTUP_TIMEOUT_SECONDS="$(( (${SONNY_SERVICE_STARTUP_TIMEOUT_MS:-30000} + 999) / 1000 ))"
 
 bash "${PROJECT_ROOT}/scripts/start-services.sh"
-wait_for_health "whisper" "${STT_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
+if [[ "${STT_PROVIDER}" == "faster-whisper" ]]; then
+  wait_for_health "whisper" "${STT_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
+fi
 wait_for_health "qwen3-tts" "${TTS_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
 wait_for_health "vad" "${VAD_HEALTH_URL}" "${STARTUP_TIMEOUT_SECONDS}"
 
