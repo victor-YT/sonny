@@ -31,6 +31,19 @@ const TEST_PERSONALITY: PersonalityConfig = {
 
 class StreamingLlmStub implements LlmProvider {
   public readonly name = 'streaming-llm-stub';
+  public chunks: LlmStreamChunk[] = [
+    {
+      type: 'text',
+      text: 'Pipeline ',
+    },
+    {
+      type: 'text',
+      text: 'nominal.',
+    },
+    {
+      type: 'done',
+    },
+  ];
   public readonly calls: Array<{
     messages: LlmMessage[];
     options: LlmGenerateOptions | undefined;
@@ -49,17 +62,9 @@ class StreamingLlmStub implements LlmProvider {
       options,
     });
 
-    yield {
-      type: 'text',
-      text: 'Pipeline ',
-    };
-    yield {
-      type: 'text',
-      text: 'nominal.',
-    };
-    yield {
-      type: 'done',
-    };
+    for (const chunk of this.chunks) {
+      yield chunk;
+    }
   }
 
   public stream(
@@ -201,6 +206,35 @@ test('Gateway.streamChat sends a message through prompt-building, streaming, and
         fixture.gateway.currentSession.id,
       ).length,
       2,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('Gateway.streamChat blocks subprocess diagnostics from assistant content', async () => {
+  const fixture = await createGatewayFixture();
+
+  fixture.llmProvider.chunks = [
+    {
+      type: 'text',
+      text: 'bufio.Reader could not be identified to support stdout/stderr, sorry.',
+    },
+  ];
+
+  try {
+    await assert.rejects(
+      async () => {
+        for await (const _chunk of fixture.gateway.streamChat('hello')) {
+          // Drain the stream.
+        }
+      },
+      /Blocked contaminated assistant output/u,
+    );
+
+    assert.deepStrictEqual(
+      fixture.gateway.currentSession.getHistory().map((message) => message.role),
+      ['user'],
     );
   } finally {
     await fixture.cleanup();

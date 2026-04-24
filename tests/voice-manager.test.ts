@@ -10,11 +10,13 @@ import type { TtsOptions, TtsProvider } from '../src/voice/providers/tts.js';
 import { VoiceManager } from '../src/voice/voice-manager.js';
 
 class GatewayStreamStub {
+  public constructor(private readonly text = 'First sentence. Second sentence.') {}
+
   public async *streamChat(
     _userMessage: string,
     _options: { signal?: AbortSignal } = {},
   ): AsyncIterable<LlmStreamChunk> {
-    yield { type: 'text', text: 'First sentence. Second sentence.' };
+    yield { type: 'text', text: this.text };
     yield { type: 'done' };
   }
 }
@@ -71,4 +73,22 @@ test('VoiceManager preserves spoken sentence order when TTS calls have different
     'First sentence.',
     'Second sentence.',
   ]);
+});
+
+test('VoiceManager does not send subprocess diagnostics to TTS', async () => {
+  const playbackProvider = new RecordingPlaybackProvider();
+  const manager = new VoiceManager({
+    gateway: new GatewayStreamStub(
+      'bufio.Reader could not be identified to support stdout/stderr, sorry.',
+    ) as unknown as Gateway,
+    sttProvider: new UnusedSttProvider(),
+    ttsProvider: new DelayedTtsProvider(),
+    playbackProvider,
+  });
+
+  await assert.rejects(
+    () => manager.respondToText('hello'),
+    /Blocked contaminated assistant output/u,
+  );
+  assert.deepStrictEqual(playbackProvider.playedTexts, []);
 });

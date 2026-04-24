@@ -1,5 +1,9 @@
 import { loadConfig, type RuntimeConfig } from './config.js';
 import {
+  assertAssistantOutputIsSpeakable,
+  previewText,
+} from './assistant-output-guard.js';
+import {
   ContextManager,
   type ContextManagerConfig,
 } from './context-manager.js';
@@ -218,6 +222,8 @@ export class Gateway {
       this.logLastLlmRoutingDecision();
     }
 
+    this.assertAssistantMessage(response, 'generate');
+    this.logAssistantResponseBeforeReturn(response.content, 'generate');
     this.session.addMessage(response);
     await this.memoryManager.recordMessage(this.session.id, response);
 
@@ -259,6 +265,15 @@ export class Gateway {
 
     for await (const chunk of stream) {
       if (chunk.type === 'text' && chunk.text !== undefined) {
+        assertAssistantOutputIsSpeakable(
+          chunk.text,
+          this.describeLlmSource('stream'),
+        );
+        assertAssistantOutputIsSpeakable(
+          `${assistantContent}${chunk.text}`,
+          this.describeLlmSource('stream'),
+        );
+
         if (!firstTokenRecorded) {
           firstTokenRecorded = true;
           options.timingTracker?.end('llm_first_token');
@@ -281,6 +296,7 @@ export class Gateway {
       content: assistantContent,
     };
 
+    this.logAssistantResponseBeforeReturn(assistantContent, 'stream');
     this.session.addMessage(assistantEntry);
     await this.memoryManager.recordMessage(this.session.id, assistantEntry);
   }
@@ -419,6 +435,47 @@ export class Gateway {
       this.session.addMessage(toolEntry);
       await this.memoryManager.recordMessage(this.session.id, toolEntry);
     }
+  }
+
+  private assertAssistantMessage(response: LlmMessage, path: 'generate' | 'stream'): void {
+    if (response.role !== 'assistant') {
+      throw new Error(
+        `LLM ${path} returned role "${response.role}" instead of assistant.`,
+      );
+    }
+
+    assertAssistantOutputIsSpeakable(
+      response.content,
+      this.describeLlmSource(path),
+    );
+  }
+
+  private logAssistantResponseBeforeReturn(
+    text: string,
+    path: 'generate' | 'stream',
+  ): void {
+    const decision = this.getLastLlmRoutingDecision();
+
+    console.log(
+      JSON.stringify({
+        type: 'gateway_assistant_response_before_tts',
+        sourceKind: 'model',
+        path,
+        provider: decision?.providerId ?? this.providerName,
+        providerName: decision?.providerName ?? this.providerName,
+        model: decision?.model ?? this.currentModel,
+        responseLength: text.length,
+        preview: previewText(text),
+      }),
+    );
+  }
+
+  private describeLlmSource(path: 'generate' | 'stream'): string {
+    const decision = this.getLastLlmRoutingDecision();
+    const provider = decision?.providerId ?? this.providerName;
+    const model = decision?.model ?? this.currentModel ?? 'unknown';
+
+    return `${provider}/${model}/${path}`;
   }
 
   private logLastLlmRoutingDecision(): void {

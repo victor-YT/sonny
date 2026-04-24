@@ -1356,6 +1356,28 @@ export class VoiceSessionOrchestrator {
       return;
     }
 
+    if (event.type === 'gateway_response_chunk' && event.text !== undefined) {
+      this.log('gateway_response_chunk', 'Gateway emitted model text.', {
+        sourceKind: event.sourceKind ?? 'model',
+        sourceProvider: event.sourceProvider ?? 'unknown',
+        sourceModel: event.sourceModel ?? 'unknown',
+        chunkLength: event.text.length,
+        chunkPreview: event.text.slice(0, 160),
+      });
+      return;
+    }
+
+    if (event.type === 'gateway_response_before_tts' && event.text !== undefined) {
+      this.log('gateway_response_before_tts', 'Gateway text accepted for TTS.', {
+        sourceKind: event.sourceKind ?? 'model',
+        sourceProvider: event.sourceProvider ?? 'unknown',
+        sourceModel: event.sourceModel ?? 'unknown',
+        sentenceLength: event.text.length,
+        sentencePreview: event.text.slice(0, 160),
+      });
+      return;
+    }
+
     if (event.type === 'sentence_ready' && event.text !== undefined) {
       if (this.pipelineDebug.latency.timestamps.firstSentenceReadyAt === null) {
         this.markLatencyTimestamp('firstSentenceReadyAt');

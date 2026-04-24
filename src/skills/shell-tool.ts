@@ -153,7 +153,8 @@ export class ShellToolSkill {
       exitCode: result.exitCode,
       signal: result.signal,
       stdout: this.trimOutput(result.stdout),
-      stderr: this.trimOutput(result.stderr),
+      stderrLength: result.stderr.length,
+      stderrOmitted: result.stderr.length > 0,
     });
   }
 

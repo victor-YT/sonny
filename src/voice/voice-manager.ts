@@ -1,5 +1,9 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
+import {
+  assertAssistantOutputIsSpeakable,
+  previewText,
+} from '../core/assistant-output-guard.js';
 import { loadConfig, type RuntimeConfig } from '../core/config.js';
 import { Gateway } from '../core/gateway.js';
 import { TimingTracker } from '../core/timing.js';
@@ -44,6 +48,8 @@ export type VoiceManagerEventType =
   | 'transcription_partial'
   | 'first_token'
   | 'response_partial'
+  | 'gateway_response_chunk'
+  | 'gateway_response_before_tts'
   | 'sentence_ready'
   | 'tts_request_started'
   | 'tts_first_audio_ready'
@@ -85,6 +91,9 @@ export interface VoiceManagerEvent {
   audio?: Buffer;
   result?: VoiceInteractionResult;
   error?: Error;
+  sourceKind?: 'model' | 'tool' | 'provider_error';
+  sourceProvider?: string;
+  sourceModel?: string | null;
 }
 
 export type VoiceManagerListener = (event: VoiceManagerEvent) => void;
@@ -748,6 +757,18 @@ export class VoiceManager {
         continue;
       }
 
+      const source = this.describeGatewayOutputSource();
+      assertAssistantOutputIsSpeakable(chunk.text, source.label);
+      assertAssistantOutputIsSpeakable(`${partialResponse}${chunk.text}`, source.label);
+
+      this.emit({
+        type: 'gateway_response_chunk',
+        text: chunk.text,
+        sourceKind: 'model',
+        sourceProvider: source.provider,
+        sourceModel: source.model,
+      });
+
       responseChunks.push(chunk.text);
       bufferedText += chunk.text;
       partialResponse += chunk.text;
@@ -771,6 +792,8 @@ export class VoiceManager {
 
       for (const sentence of extracted.sentences) {
         this.throwIfInterrupted(signal);
+        this.assertSpeechSegmentIsSpeakable(sentence);
+        this.emitGatewayResponseBeforeTts(sentence);
         if (!firstSentenceReadyEmitted) {
           firstSentenceReadyEmitted = true;
           this.emit({
@@ -786,6 +809,8 @@ export class VoiceManager {
 
     if (trailingSentence.length > 0) {
       this.throwIfInterrupted(signal);
+      this.assertSpeechSegmentIsSpeakable(trailingSentence);
+      this.emitGatewayResponseBeforeTts(trailingSentence);
       if (!firstSentenceReadyEmitted) {
         firstSentenceReadyEmitted = true;
         this.emit({
@@ -803,6 +828,49 @@ export class VoiceManager {
     return {
       response,
       audio: Buffer.concat(await Promise.all(sentenceAudioTasks)),
+    };
+  }
+
+  private assertSpeechSegmentIsSpeakable(sentence: string): void {
+    assertAssistantOutputIsSpeakable(sentence, this.describeGatewayOutputSource().label);
+  }
+
+  private emitGatewayResponseBeforeTts(sentence: string): void {
+    const source = this.describeGatewayOutputSource();
+
+    this.emit({
+      type: 'gateway_response_before_tts',
+      text: sentence,
+      sourceKind: 'model',
+      sourceProvider: source.provider,
+      sourceModel: source.model,
+    });
+
+    console.log(
+      JSON.stringify({
+        type: 'gateway_response_before_tts',
+        sourceKind: 'model',
+        provider: source.provider,
+        model: source.model,
+        sentenceLength: sentence.length,
+        preview: previewText(sentence),
+      }),
+    );
+  }
+
+  private describeGatewayOutputSource(): {
+    label: string;
+    provider: string;
+    model: string | null;
+  } {
+    const decision = this.gateway.getLastLlmRoutingDecision?.();
+    const provider = decision?.providerId ?? this.gateway.providerName ?? 'unknown';
+    const model = decision?.model ?? this.gateway.currentModel ?? null;
+
+    return {
+      label: `${provider}/${model ?? 'unknown'}/voice-stream`,
+      provider,
+      model,
     };
   }
 

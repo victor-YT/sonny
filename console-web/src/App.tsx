@@ -117,6 +117,8 @@ const DEBUG_REFRESH_TYPES = new Set([
   'stt_empty_transcript_ignored',
   'gateway_started',
   'gateway_first_token',
+  'gateway_response_chunk',
+  'gateway_response_before_tts',
   'gateway_first_sentence_ready',
   'gateway_finished',
   'gateway_failed',
