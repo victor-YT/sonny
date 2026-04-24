@@ -1696,10 +1696,12 @@ export class VoiceSessionOrchestrator {
     name: RuntimeServiceName,
     url: string | null,
   ): Promise<void> {
+    const checkedAt = new Date().toISOString();
+
     if (url === null) {
       this.runtimeState.setServiceHealth(name, {
         online: false,
-        checkedAt: new Date().toISOString(),
+        checkedAt,
         error: 'Service URL is not configured.',
       });
       return;
@@ -1709,21 +1711,80 @@ export class VoiceSessionOrchestrator {
       const response = await fetch(url, {
         signal: AbortSignal.timeout(2_000),
       });
+      const payload = await this.readHealthPayload(response);
+      const servicePresentation = this.buildHealthServicePresentation(name, payload);
 
       this.runtimeState.setServiceHealth(name, {
         url,
         online: response.ok,
-        checkedAt: new Date().toISOString(),
+        checkedAt,
         error: response.ok ? null : `HTTP ${response.status} ${response.statusText}`,
+        ...servicePresentation,
       });
     } catch (error: unknown) {
       this.runtimeState.setServiceHealth(name, {
         url,
         online: false,
-        checkedAt: new Date().toISOString(),
+        checkedAt,
         error: toErrorMessage(error),
       });
     }
+  }
+
+  private async readHealthPayload(
+    response: Response,
+  ): Promise<Record<string, unknown> | null> {
+    const contentType = response.headers.get('content-type') ?? '';
+
+    if (!contentType.includes('application/json')) {
+      return null;
+    }
+
+    try {
+      const payload = await response.json();
+      return isRecord(payload) ? payload : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildHealthServicePresentation(
+    name: RuntimeServiceName,
+    payload: Record<string, unknown> | null,
+  ): { label?: string; details?: string | null } {
+    if (payload === null) {
+      return {};
+    }
+
+    const current = this.runtimeState.getSnapshot().services[name];
+    const model = readStringRecordValue(payload, 'model');
+
+    if (name === 'stt') {
+      const provider = readStringRecordValue(payload, 'provider') ?? this.voiceGateway.manager.sttProviderName;
+      const device = readStringRecordValue(payload, 'device');
+      const computeType = readStringRecordValue(payload, 'compute_type');
+      const vadFilter = readStringRecordValue(payload, 'vad_filter');
+      const details = [
+        'STT',
+        provider,
+        device === null ? null : `device=${device}`,
+        computeType,
+        vadFilter === null ? null : `vad=${vadFilter}`,
+      ].filter((value): value is string => value !== null && value.length > 0).join(' · ');
+
+      return {
+        label: model ?? current.label,
+        details,
+      };
+    }
+
+    if (name === 'tts' && model !== null) {
+      return {
+        label: model,
+      };
+    }
+
+    return {};
   }
 
   private async persistDebugAudio(audio: Buffer): Promise<LastAudioDebugInfo> {
@@ -3037,6 +3098,24 @@ function normalizeOptionalHealthUrl(value: string | undefined): string | null {
   }
 
   return `${normalizeBaseUrl(value)}/health`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readStringRecordValue(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = record[key];
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length === 0 ? null : normalized;
 }
 
 async function* createBufferedChunkStream(

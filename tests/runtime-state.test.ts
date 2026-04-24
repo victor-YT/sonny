@@ -23,6 +23,8 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
   runtimeState.setLastResponseText('pipeline nominal');
   runtimeState.setPlaybackActive(true);
   runtimeState.setServiceHealth('ollama', {
+    label: 'qwen3:8b',
+    details: 'LLM · ollama-foreground',
     online: true,
   });
 
@@ -40,6 +42,8 @@ test('RuntimeStateStore tracks state, logs, services, and conversation turns', (
   assert.equal(snapshot.lastResponseText, 'pipeline nominal');
   assert.equal(snapshot.currentSessionId, 'session-1');
   assert.equal(snapshot.services.ollama.online, true);
+  assert.equal(snapshot.services.ollama.label, 'qwen3:8b');
+  assert.equal(snapshot.services.ollama.details, 'LLM · ollama-foreground');
   assert.equal(conversation.length, 1);
   assert.equal(conversation[0]?.userTranscript, 'hello sonny');
   assert.equal(conversation[0]?.assistantText, 'pipeline nominal');

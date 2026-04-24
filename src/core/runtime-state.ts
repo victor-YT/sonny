@@ -369,6 +369,8 @@ export class RuntimeStateStore {
   public setServiceHealth(
     name: RuntimeServiceName,
     update: {
+      label?: string;
+      details?: string | null;
       url?: string | null;
       online: boolean;
       checkedAt?: string;
@@ -384,6 +386,8 @@ export class RuntimeStateStore {
         ...this.snapshot.services,
         [name]: {
           ...current,
+          label: update.label ?? current.label,
+          details: update.details === undefined ? current.details : update.details,
           url: update.url ?? current.url,
           online: update.online,
           checkedAt: update.checkedAt ?? this.nowIso(),

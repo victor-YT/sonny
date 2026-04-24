@@ -21,6 +21,7 @@ DEFAULT_MODEL_NAME = "small"
 DEFAULT_COMPUTE_TYPE = "int8"
 DEFAULT_DEVICE = "auto"
 DEFAULT_STREAM_CHUNK_BYTES = 64_000
+DEFAULT_STREAM_PARTIAL_OVERLAP_MS = 1_000
 DEFAULT_STREAM_SAMPLE_RATE = 16_000
 DEFAULT_STREAM_CHANNELS = 1
 DEFAULT_VAD_FILTER = False
@@ -152,8 +153,12 @@ service = WhisperService()
 async def health() -> dict[str, str]:
     return {
         "status": "ok",
+        "provider": "faster-whisper",
         "model": service.model_name,
+        "device": service.device,
+        "compute_type": service.compute_type,
         "vad_filter": str(service.vad_filter).lower(),
+        "loaded": str(service._model is not None).lower(),
     }
 
 
@@ -232,6 +237,11 @@ async def _stream_transcription(
 
         payload, duration_ms = await pending_snapshot_task
         pending_snapshot_task = None
+        if not bool(payload.get("final", False)):
+            payload["text"] = _merge_transcript_text(
+                emitted_text,
+                str(payload.get("text", "")).strip(),
+            )
         _log_stream_event(
             "snapshot finished",
             text_length=len(payload.get("text", "")),
@@ -293,8 +303,18 @@ async def _stream_transcription(
             if len(buffer) - last_processed_size < DEFAULT_STREAM_CHUNK_BYTES:
                 continue
 
+            previous_processed_size = last_processed_size
             last_processed_size = len(buffer)
-            start_snapshot(bytes(buffer), final=False)
+            start_snapshot(
+                _select_partial_snapshot_bytes(
+                    buffer,
+                    encoding=encoding,
+                    sample_rate_hertz=sample_rate_hertz,
+                    channels=channels,
+                    previous_processed_size=previous_processed_size,
+                ),
+                final=False,
+            )
     except ClientDisconnect:
         client_disconnected = True
         _log_stream_event(
@@ -417,6 +437,51 @@ def _prepare_audio_bytes(
     buffer.seek(0)
 
     return buffer.read()
+
+
+def _select_partial_snapshot_bytes(
+    buffer: bytearray,
+    *,
+    encoding: str,
+    sample_rate_hertz: int,
+    channels: int,
+    previous_processed_size: int,
+) -> bytes:
+    if encoding != "pcm_s16le":
+        return bytes(buffer)
+
+    bytes_per_millisecond = sample_rate_hertz * channels * 2 / 1000
+    overlap_bytes = int(DEFAULT_STREAM_PARTIAL_OVERLAP_MS * bytes_per_millisecond)
+    start_index = max(0, previous_processed_size - overlap_bytes)
+    return bytes(buffer[start_index:])
+
+
+def _merge_transcript_text(existing: str, incoming: str) -> str:
+    existing = existing.strip()
+    incoming = incoming.strip()
+
+    if len(existing) == 0:
+        return incoming
+
+    if len(incoming) == 0:
+        return existing
+
+    existing_lower = existing.lower()
+    incoming_lower = incoming.lower()
+
+    if existing_lower.endswith(incoming_lower):
+        return existing
+
+    if incoming_lower.startswith(existing_lower):
+        return incoming
+
+    max_overlap = min(len(existing), len(incoming))
+
+    for overlap in range(max_overlap, 0, -1):
+        if existing_lower[-overlap:] == incoming_lower[:overlap]:
+            return f"{existing}{incoming[overlap:]}".strip()
+
+    return f"{existing} {incoming}".strip()
 
 
 def _read_text_value(value: str | None) -> str | None:
