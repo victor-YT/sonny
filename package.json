@@ -25,6 +25,7 @@
     "voice:latency": "pnpm run build && node dist/dev/voice-latency-benchmark.js",
     "voice:smoke": "pnpm run build && node dist/dev/voice-smoke.js",
     "voice:providers": "pnpm run build && node dist/dev/provider-status.js",
+    "llm:olmx:test": "pnpm run build && node dist/dev/olmx-smoke.js",
     "stt:sherpa:test": "pnpm run build && node dist/dev/sherpa-onnx-smoke.js",
     "stt:sherpa:model": "bash ./scripts/download-sherpa-onnx-model.sh",
     "stt:benchmark": "pnpm run build && node dist/dev/stt-benchmark.js",

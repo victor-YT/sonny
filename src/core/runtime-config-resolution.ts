@@ -6,6 +6,7 @@ export function resolveRuntimeConfigFromEnvironment(
 ): RuntimeConfig {
   const foregroundModel = firstNonEmpty([
     environment.SONNY_FOREGROUND_MODEL,
+    environment.OLMX_MODEL,
     environment.OLLAMA_MODEL,
     environment.SONNY_OLLAMA_MODEL,
   ]) ?? baseConfig.foregroundModel;
@@ -25,6 +26,19 @@ export function resolveRuntimeConfigFromEnvironment(
           environment.SONNY_OLLAMA_BASE_URL,
         ]) ?? baseConfig.ollama.baseUrl,
       model: foregroundModel,
+    },
+    olmx: {
+      ...baseConfig.olmx,
+      baseUrl:
+        firstNonEmpty([
+          environment.OLMX_BASE_URL,
+          environment.SONNY_OLMX_BASE_URL,
+        ]) ?? baseConfig.olmx.baseUrl,
+      model:
+        firstNonEmpty([
+          environment.OLMX_MODEL,
+          environment.SONNY_FOREGROUND_MODEL,
+        ]) ?? baseConfig.olmx.model,
     },
     voice: {
       ...baseConfig.voice,

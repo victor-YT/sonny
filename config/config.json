@@ -3,6 +3,10 @@
     "baseUrl": "http://localhost:11434",
     "model": "qwen3:8b"
   },
+  "olmx": {
+    "baseUrl": "http://127.0.0.1:8000",
+    "model": "Qwen2.5-1.5B-Instruct-4bit"
+  },
   "voice": {
     "fasterWhisper": {
       "url": "http://127.0.0.1:8000"
@@ -57,5 +61,9 @@
       }
     }
   },
-  "sttProvider": "sherpa-onnx"
+  "sttProvider": "sherpa-onnx",
+  "foregroundLlmProvider": "olmx-foreground",
+  "backgroundLlmProvider": "ollama-background",
+  "foregroundModel": "Qwen2.5-1.5B-Instruct-4bit",
+  "backgroundModel": "qwen3:8b"
 }

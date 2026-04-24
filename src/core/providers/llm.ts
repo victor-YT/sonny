@@ -32,6 +32,21 @@ export interface LlmRoutingDecision {
   timestamp: string;
 }
 
+export interface LlmProviderDebugInfo {
+  providerName: string;
+  baseUrl?: string;
+  model: string | null;
+  requestStartedAt: string | null;
+  firstTokenAt: string | null;
+  firstSentenceAt: string | null;
+  responseFinishedAt: string | null;
+  streamingUsed: boolean | null;
+  firstTokenLatencyMs: number | null;
+  firstSentenceLatencyMs: number | null;
+  fullResponseLatencyMs: number | null;
+  failureReason: string | null;
+}
+
 export interface LlmProvider {
   readonly name: string;
   readonly currentModel?: string | null;
@@ -48,6 +63,7 @@ export interface LlmProvider {
     options?: LlmGenerateOptions,
   ): AsyncIterable<LlmStreamChunk>;
   getLastRoutingDecision?(): LlmRoutingDecision | null;
+  getLastDebugInfo?(): LlmProviderDebugInfo | null;
 }
 
 export interface LlmGenerateOptions {

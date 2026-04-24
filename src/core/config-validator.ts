@@ -24,6 +24,7 @@ export function validateConfig(value: unknown): RuntimeConfig {
   const issues: string[] = [];
   const root = expectRecord(value, 'config', issues);
   const ollama = expectNestedRecord(root, 'config.ollama', issues, 'ollama');
+  const olmx = readOptionalRecord(root, 'config.olmx', issues, 'olmx');
   const voice = expectNestedRecord(root, 'config.voice', issues, 'voice');
   const fasterWhisper = expectNestedRecord(
     voice,
@@ -56,6 +57,14 @@ export function validateConfig(value: unknown): RuntimeConfig {
     ollama: {
       baseUrl: readUrl(ollama, 'config.ollama.baseUrl', issues, 'baseUrl'),
       model: readString(ollama, 'config.ollama.model', issues, 'model'),
+    },
+    olmx: {
+      baseUrl:
+        readOptionalUrl(olmx, 'config.olmx.baseUrl', issues, 'baseUrl') ??
+        'http://127.0.0.1:8000',
+      model:
+        readOptionalString(olmx, 'config.olmx.model', issues, 'model') ??
+        'Qwen2.5-1.5B-Instruct-4bit',
     },
     voice: {
       fasterWhisper: {
@@ -150,7 +159,7 @@ export function validateConfig(value: unknown): RuntimeConfig {
         'config.foregroundLlmProvider',
         issues,
         'foregroundLlmProvider',
-      ) ?? 'ollama-foreground',
+      ) ?? 'olmx-foreground',
     backgroundLlmProvider:
       readOptionalString(
         root,
@@ -170,7 +179,8 @@ export function validateConfig(value: unknown): RuntimeConfig {
       ) ?? 'system-player',
     foregroundModel:
       readOptionalString(root, 'config.foregroundModel', issues, 'foregroundModel') ??
-      readString(ollama, 'config.ollama.model', issues, 'model'),
+      readOptionalString(olmx, 'config.olmx.model', issues, 'model') ??
+      'Qwen2.5-1.5B-Instruct-4bit',
     backgroundModel:
       readOptionalString(root, 'config.backgroundModel', issues, 'backgroundModel') ??
       readString(ollama, 'config.ollama.model', issues, 'model'),

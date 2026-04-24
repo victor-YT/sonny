@@ -13,6 +13,11 @@ export interface OllamaRuntimeConfig {
   model: string;
 }
 
+export interface OlmxRuntimeConfig {
+  baseUrl: string;
+  model: string;
+}
+
 export interface FasterWhisperRuntimeConfig {
   url: string;
 }
@@ -65,6 +70,7 @@ export interface SkillsRuntimeConfig {
 
 export interface RuntimeConfig {
   ollama: OllamaRuntimeConfig;
+  olmx: OlmxRuntimeConfig;
   voice: VoiceRuntimeConfig;
   memory: MemoryRuntimeConfig;
   skills: SkillsRuntimeConfig;
@@ -79,6 +85,7 @@ export interface RuntimeConfig {
 
 export interface RuntimeConfigUpdate {
   ollama?: Partial<OllamaRuntimeConfig>;
+  olmx?: Partial<OlmxRuntimeConfig>;
   voice?: {
     fasterWhisper?: Partial<FasterWhisperRuntimeConfig>;
     sherpaOnnx?: Partial<SherpaOnnxRuntimeConfig>;
@@ -188,6 +195,7 @@ function applyRuntimeConfigUpdate(
   const chatterbox = isRecord(voice.chatterbox) ? voice.chatterbox : {};
   const porcupine = isRecord(voice.porcupine) ? voice.porcupine : {};
   const ollama = isRecord(current.ollama) ? current.ollama : {};
+  const olmx = isRecord(current.olmx) ? current.olmx : {};
   const memory = isRecord(current.memory) ? current.memory : {};
 
   return {
@@ -195,6 +203,10 @@ function applyRuntimeConfigUpdate(
     ollama: {
       ...ollama,
       ...update.ollama,
+    },
+    olmx: {
+      ...olmx,
+      ...update.olmx,
     },
     voice: {
       ...voice,

@@ -8,6 +8,8 @@ export interface StartupEnvironment {
   foregroundModel?: string;
   backgroundModel?: string;
   ollamaBaseUrl?: string;
+  olmxBaseUrl?: string;
+  olmxModel?: string;
   voiceMode: boolean;
   sttProvider: string;
   wakeWordUrl?: string;
@@ -34,7 +36,7 @@ export function loadStartupEnvironment(
   const issues: string[] = [];
   const foregroundModel = readOptionalEnv(
     environment,
-    ['SONNY_FOREGROUND_MODEL', 'OLLAMA_MODEL', 'SONNY_OLLAMA_MODEL'],
+    ['SONNY_FOREGROUND_MODEL', 'OLMX_MODEL', 'OLLAMA_MODEL', 'SONNY_OLLAMA_MODEL'],
   );
   const backgroundModel = readOptionalEnv(
     environment,
@@ -45,6 +47,16 @@ export function loadStartupEnvironment(
     ['OLLAMA_BASE_URL', 'SONNY_OLLAMA_BASE_URL'],
     'OLLAMA_BASE_URL',
     issues,
+  );
+  const olmxBaseUrl = readOptionalUrl(
+    environment,
+    ['OLMX_BASE_URL', 'SONNY_OLMX_BASE_URL'],
+    'OLMX_BASE_URL',
+    issues,
+  );
+  const olmxModel = readOptionalEnv(
+    environment,
+    ['OLMX_MODEL', 'SONNY_FOREGROUND_MODEL'],
   );
   const voiceMode = readOptionalBoolean(environment, 'SONNY_VOICE_MODE') ?? false;
   const sttProvider = readOptionalEnv(
@@ -95,6 +107,8 @@ export function loadStartupEnvironment(
     foregroundModel,
     backgroundModel,
     ollamaBaseUrl,
+    olmxBaseUrl,
+    olmxModel,
     voiceMode,
     sttProvider,
     wakeWordUrl,

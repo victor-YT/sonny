@@ -145,6 +145,13 @@ ollama serve
 ollama pull qwen3:8b
 ```
 
+For low-latency foreground voice turns, start OLMX with its OpenAI-compatible
+local API enabled. Sonny expects chat completions at:
+
+```text
+http://127.0.0.1:8000/v1/chat/completions
+```
+
 ### Environment Configuration
 
 Sonny reads startup values from `.env`, tracked default settings from `config/config.json`, and local runtime state from `.local/`.
@@ -155,6 +162,12 @@ The default `.env.example` contains:
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_KEEP_ALIVE=-1
+SONNY_FOREGROUND_LLM_PROVIDER=olmx-foreground
+SONNY_FOREGROUND_MODEL=Qwen2.5-1.5B-Instruct-4bit
+OLMX_MODEL=Qwen2.5-1.5B-Instruct-4bit
+OLMX_BASE_URL=http://127.0.0.1:8000
+SONNY_BACKGROUND_LLM_PROVIDER=ollama-background
+SONNY_BACKGROUND_MODEL=qwen3:8b
 PORCUPINE_ACCESS_KEY=replace-me
 FASTER_WHISPER_URL=http://127.0.0.1:8000
 SONNY_STT_PROVIDER=sherpa-onnx
@@ -172,6 +185,11 @@ Important values:
 
 - `OLLAMA_MODEL`: model name for chat generation
 - `OLLAMA_BASE_URL`: Ollama HTTP endpoint
+- `SONNY_FOREGROUND_LLM_PROVIDER`: `olmx-foreground` by default for realtime voice turns
+- `SONNY_FOREGROUND_MODEL` / `OLMX_MODEL`: foreground OLMX model, default `Qwen2.5-1.5B-Instruct-4bit`
+- `OLMX_BASE_URL`: OLMX OpenAI-compatible base URL, default `http://127.0.0.1:8000`
+- `SONNY_BACKGROUND_LLM_PROVIDER`: `ollama-background` by default
+- `SONNY_BACKGROUND_MODEL`: background Ollama model, default `qwen3:8b`
 - `PORCUPINE_ACCESS_KEY`: required only for wake-word experiments
 - `SONNY_STT_PROVIDER`: `sherpa-onnx` by default; set `faster-whisper` for the fallback HTTP STT service
 - `SHERPA_ONNX_MODEL_DIR`: local sherpa-onnx streaming model directory
@@ -337,6 +355,8 @@ Optional voice-related environment overrides supported by `src/voice/voice-gatew
 - `SONNY_STT_PROVIDER`
 - `SONNY_FOREGROUND_LLM_PROVIDER`
 - `SONNY_BACKGROUND_LLM_PROVIDER`
+- `OLMX_BASE_URL`
+- `OLMX_MODEL`
 - `SONNY_TTS_PROVIDER`
 - `SONNY_PLAYBACK_PROVIDER`
 - `SONNY_FOREGROUND_MODEL`
@@ -365,6 +385,19 @@ Provider resolution can be inspected with:
 
 ```bash
 pnpm run voice:providers
+```
+
+Smoke-test OLMX directly:
+
+```bash
+pnpm run llm:olmx:test
+```
+
+Switch foreground generation back to Ollama with:
+
+```env
+SONNY_FOREGROUND_LLM_PROVIDER=ollama-foreground
+SONNY_FOREGROUND_MODEL=qwen3:8b
 ```
 
 #### Desktop host behavior

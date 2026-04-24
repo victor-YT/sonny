@@ -253,6 +253,7 @@ export interface VoicePipelineDebugInfo {
     sttProvider: string | null;
     foregroundLlmProvider: string | null;
     backgroundLlmProvider: string | null;
+    olmxBaseUrl: string | null;
     ttsProvider: string | null;
     playbackProvider: string | null;
     foregroundModel: string | null;
@@ -261,6 +262,17 @@ export interface VoicePipelineDebugInfo {
     lastSelectedModel: string | null;
     lastSelectedLane: 'foreground' | 'background' | null;
     lastRouterReason: string | null;
+    lastLlmProviderName: string | null;
+    lastLlmBaseUrl: string | null;
+    lastLlmRequestStartedAt: string | null;
+    lastLlmFirstTokenAt: string | null;
+    lastLlmFirstSentenceAt: string | null;
+    lastLlmResponseFinishedAt: string | null;
+    lastLlmStreamingUsed: boolean | null;
+    lastLlmFirstTokenLatencyMs: number | null;
+    lastLlmFirstSentenceLatencyMs: number | null;
+    lastLlmFullResponseLatencyMs: number | null;
+    lastLlmFailureReason: string | null;
   };
   interruptedByUser: boolean;
   bargeIn: {
@@ -1164,7 +1176,7 @@ export class VoiceSessionOrchestrator {
 
   public async refreshHealth(): Promise<void> {
     await Promise.all([
-      this.checkHealth('ollama', `${normalizeBaseUrl(this.runtimeConfig.ollama.baseUrl)}/api/tags`),
+      this.checkHealth('ollama', this.buildLlmHealthUrl()),
       this.checkSttHealth(),
       this.checkHealth(
         'tts',
@@ -1179,6 +1191,14 @@ export class VoiceSessionOrchestrator {
         normalizeOptionalHealthUrl(this.environmentConfig.vadBaseUrl ?? 'http://127.0.0.1:8003'),
       ),
     ]);
+  }
+
+  private buildLlmHealthUrl(): string {
+    if (this.runtimeConfig.foregroundLlmProvider === 'olmx-foreground') {
+      return `${normalizeBaseUrl(this.runtimeConfig.olmx.baseUrl)}/v1/models`;
+    }
+
+    return `${normalizeBaseUrl(this.runtimeConfig.ollama.baseUrl)}/api/tags`;
   }
 
   private async checkSttHealth(): Promise<void> {
@@ -1650,11 +1670,13 @@ export class VoiceSessionOrchestrator {
   private buildProviderDebugInfo(): VoicePipelineDebugInfo['providers'] {
     const selections = this.gateway.getProviderSelections();
     const lastDecision = this.gateway.getLastLlmRoutingDecision();
+    const lastLlmDebug = this.gateway.getLastLlmDebugInfo();
 
     return {
       sttProvider: selections?.sttProvider ?? this.voiceGateway.manager.sttProviderName,
       foregroundLlmProvider: selections?.foregroundLlmProvider ?? null,
       backgroundLlmProvider: selections?.backgroundLlmProvider ?? null,
+      olmxBaseUrl: selections?.olmxBaseUrl ?? null,
       ttsProvider: selections?.ttsProvider ?? this.voiceGateway.manager.ttsProviderName,
       playbackProvider: selections?.playbackProvider ?? this.voiceGateway.manager.playbackProviderName,
       foregroundModel: selections?.foregroundModel ?? null,
@@ -1663,6 +1685,17 @@ export class VoiceSessionOrchestrator {
       lastSelectedModel: lastDecision?.model ?? null,
       lastSelectedLane: lastDecision?.lane ?? null,
       lastRouterReason: lastDecision?.reason ?? null,
+      lastLlmProviderName: lastLlmDebug?.providerName ?? null,
+      lastLlmBaseUrl: lastLlmDebug?.baseUrl ?? null,
+      lastLlmRequestStartedAt: lastLlmDebug?.requestStartedAt ?? null,
+      lastLlmFirstTokenAt: lastLlmDebug?.firstTokenAt ?? null,
+      lastLlmFirstSentenceAt: lastLlmDebug?.firstSentenceAt ?? null,
+      lastLlmResponseFinishedAt: lastLlmDebug?.responseFinishedAt ?? null,
+      lastLlmStreamingUsed: lastLlmDebug?.streamingUsed ?? null,
+      lastLlmFirstTokenLatencyMs: lastLlmDebug?.firstTokenLatencyMs ?? null,
+      lastLlmFirstSentenceLatencyMs: lastLlmDebug?.firstSentenceLatencyMs ?? null,
+      lastLlmFullResponseLatencyMs: lastLlmDebug?.fullResponseLatencyMs ?? null,
+      lastLlmFailureReason: lastLlmDebug?.failureReason ?? null,
     };
   }
 
@@ -2278,6 +2311,7 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       sttProvider: null,
       foregroundLlmProvider: null,
       backgroundLlmProvider: null,
+      olmxBaseUrl: null,
       ttsProvider: null,
       playbackProvider: null,
       foregroundModel: null,
@@ -2286,6 +2320,17 @@ function createEmptyPipelineDebug(flow: FlowKind | null = null): VoicePipelineDe
       lastSelectedModel: null,
       lastSelectedLane: null,
       lastRouterReason: null,
+      lastLlmProviderName: null,
+      lastLlmBaseUrl: null,
+      lastLlmRequestStartedAt: null,
+      lastLlmFirstTokenAt: null,
+      lastLlmFirstSentenceAt: null,
+      lastLlmResponseFinishedAt: null,
+      lastLlmStreamingUsed: null,
+      lastLlmFirstTokenLatencyMs: null,
+      lastLlmFirstSentenceLatencyMs: null,
+      lastLlmFullResponseLatencyMs: null,
+      lastLlmFailureReason: null,
     },
     interruptedByUser: false,
     bargeIn: {

@@ -2,6 +2,7 @@ import type {
   LlmGenerateOptions,
   LlmMessage,
   LlmProvider,
+  LlmProviderDebugInfo,
   LlmRoutingDecision,
   LlmStreamChunk,
 } from './llm.js';
@@ -43,6 +44,14 @@ export class RoutedLlmProvider implements LlmProvider {
 
   public getLastRoutingDecision(): LlmRoutingDecision | null {
     return this.lastDecision === null ? null : { ...this.lastDecision };
+  }
+
+  public getLastDebugInfo(): LlmProviderDebugInfo | null {
+    const lane = this.lastDecision?.lane === 'background'
+      ? this.background
+      : this.foreground;
+
+    return lane.provider.getLastDebugInfo?.() ?? null;
   }
 
   public getRoutingSnapshot(): LlmRoutingSnapshot {

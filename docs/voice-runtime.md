@@ -9,7 +9,7 @@ The voice runtime has one primary turn shape:
 1. `Listening`: capture microphone PCM at 16 kHz mono.
 2. `Silence Detected`: VAD marks end-of-turn after speech has started and enough trailing silence has accumulated.
 3. `STT`: sherpa-onnx consumes live PCM chunks by default, emits partial transcripts, and returns a final transcript after end-of-turn. faster-whisper remains available as a fallback provider.
-4. `LLM`: `Gateway.streamChat()` sends the transcript through prompt/context/memory and streams assistant text.
+4. `LLM`: `Gateway.streamChat()` sends the transcript through prompt/context/memory and streams assistant text. The default foreground provider is OLMX via OpenAI-compatible `/v1/chat/completions`; Ollama remains the background/fallback provider.
 5. `TTS`: streamed assistant text is segmented into spoken sentences and sent to Qwen3-TTS.
 6. `Playback`: synthesized audio is queued and played by the system speaker.
 
@@ -31,7 +31,7 @@ Provider interfaces live under `src/voice/providers/` and `src/core/providers/`.
 - `TtsProvider`: owns text-to-audio synthesis. The default implementation is `Qwen3TTSProvider` in `chatterbox.ts`; the compatibility file name is historical.
 - `PlaybackProvider`: owns adding synthesized audio to playback. The default implementation is `SystemPlaybackProvider`.
 - `WakeWordProvider`: owns wake word events. Current local service implementation is `PorcupineProvider`, but its runtime name is `openwakeword`.
-- `LlmProvider`: owns generation. `Gateway` wraps it with prompt building, session persistence, memory, and tools.
+- `LlmProvider`: owns generation. `OlmxForegroundProvider` is the default foreground realtime provider; `OllamaProvider` remains selectable for foreground and is the default background provider. `Gateway` wraps providers with prompt building, session persistence, memory, and tools.
 
 ## State Ownership
 
@@ -89,6 +89,7 @@ Useful manual checks:
 
 ```bash
 pnpm voice:providers
+pnpm llm:olmx:test
 pnpm voice:simulate
 pnpm stt:sherpa:test -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav
 pnpm stt:benchmark -- --file models/sherpa-onnx-streaming-paraformer-bilingual-zh-en/test_wavs/0.wav

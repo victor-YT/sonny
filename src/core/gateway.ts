@@ -11,6 +11,7 @@ import {
 import type {
   LlmMessage,
   LlmProvider,
+  LlmProviderDebugInfo,
   LlmRoutingDecision,
   LlmStreamChunk,
   ToolCall,
@@ -50,6 +51,7 @@ export interface GatewayProviderSelectionInfo {
   sttProvider: string;
   foregroundLlmProvider: string;
   backgroundLlmProvider: string;
+  olmxBaseUrl: string;
   ttsProvider: string;
   playbackProvider: string;
   foregroundModel: string;
@@ -144,6 +146,7 @@ export class Gateway {
       sttProvider: this.runtimeConfig.sttProvider,
       foregroundLlmProvider: this.runtimeConfig.foregroundLlmProvider,
       backgroundLlmProvider: this.runtimeConfig.backgroundLlmProvider,
+      olmxBaseUrl: this.runtimeConfig.olmx.baseUrl,
       ttsProvider: this.runtimeConfig.ttsProvider,
       playbackProvider: this.runtimeConfig.playbackProvider,
       foregroundModel: this.runtimeConfig.foregroundModel,
@@ -153,6 +156,10 @@ export class Gateway {
 
   public getLastLlmRoutingDecision(): LlmRoutingDecision | null {
     return this.llmProvider.getLastRoutingDecision?.() ?? null;
+  }
+
+  public getLastLlmDebugInfo(): LlmProviderDebugInfo | null {
+    return this.llmProvider.getLastDebugInfo?.() ?? null;
   }
 
   public get currentRuntimeConfig(): RuntimeConfig | undefined {

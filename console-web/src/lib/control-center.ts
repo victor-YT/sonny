@@ -232,6 +232,7 @@ export interface PipelineDebugInfo {
     sttProvider: string | null
     foregroundLlmProvider: string | null
     backgroundLlmProvider: string | null
+    olmxBaseUrl: string | null
     ttsProvider: string | null
     playbackProvider: string | null
     foregroundModel: string | null
@@ -240,6 +241,17 @@ export interface PipelineDebugInfo {
     lastSelectedModel: string | null
     lastSelectedLane: 'foreground' | 'background' | null
     lastRouterReason: string | null
+    lastLlmProviderName: string | null
+    lastLlmBaseUrl: string | null
+    lastLlmRequestStartedAt: string | null
+    lastLlmFirstTokenAt: string | null
+    lastLlmFirstSentenceAt: string | null
+    lastLlmResponseFinishedAt: string | null
+    lastLlmStreamingUsed: boolean | null
+    lastLlmFirstTokenLatencyMs: number | null
+    lastLlmFirstSentenceLatencyMs: number | null
+    lastLlmFullResponseLatencyMs: number | null
+    lastLlmFailureReason: string | null
   }
   interruptedByUser: boolean
   bargeIn: {
@@ -564,6 +576,7 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `sttProvider: ${pipeline.providers.sttProvider ?? 'Unknown'}`,
     `foregroundLlmProvider: ${pipeline.providers.foregroundLlmProvider ?? 'Unknown'}`,
     `backgroundLlmProvider: ${pipeline.providers.backgroundLlmProvider ?? 'Unknown'}`,
+    `olmxBaseUrl: ${pipeline.providers.olmxBaseUrl ?? 'Unknown'}`,
     `ttsProvider: ${pipeline.providers.ttsProvider ?? 'Unknown'}`,
     `playbackProvider: ${pipeline.providers.playbackProvider ?? 'Unknown'}`,
     `foregroundModel: ${pipeline.providers.foregroundModel ?? 'Unknown'}`,
@@ -572,6 +585,17 @@ export function buildPipelineDebug(pipeline: PipelineDebugInfo | null): string {
     `lastSelectedModel: ${pipeline.providers.lastSelectedModel ?? 'Unknown'}`,
     `lastSelectedLane: ${pipeline.providers.lastSelectedLane ?? 'Unknown'}`,
     `lastRouterReason: ${pipeline.providers.lastRouterReason ?? 'Unknown'}`,
+    `lastLlmProviderName: ${pipeline.providers.lastLlmProviderName ?? 'Unknown'}`,
+    `lastLlmBaseUrl: ${pipeline.providers.lastLlmBaseUrl ?? 'Unknown'}`,
+    `lastLlmRequestStartedAt: ${pipeline.providers.lastLlmRequestStartedAt ?? 'Unknown'}`,
+    `lastLlmFirstTokenAt: ${pipeline.providers.lastLlmFirstTokenAt ?? 'Unknown'}`,
+    `lastLlmFirstSentenceAt: ${pipeline.providers.lastLlmFirstSentenceAt ?? 'Unknown'}`,
+    `lastLlmResponseFinishedAt: ${pipeline.providers.lastLlmResponseFinishedAt ?? 'Unknown'}`,
+    `lastLlmStreamingUsed: ${String(pipeline.providers.lastLlmStreamingUsed ?? 'Unknown')}`,
+    `lastLlmFirstTokenLatencyMs: ${formatDuration(pipeline.providers.lastLlmFirstTokenLatencyMs)}`,
+    `lastLlmFirstSentenceLatencyMs: ${formatDuration(pipeline.providers.lastLlmFirstSentenceLatencyMs)}`,
+    `lastLlmFullResponseLatencyMs: ${formatDuration(pipeline.providers.lastLlmFullResponseLatencyMs)}`,
+    `lastLlmFailureReason: ${pipeline.providers.lastLlmFailureReason ?? 'Unknown'}`,
     '',
     `interruptedByUser: ${String(pipeline.interruptedByUser)}`,
     `bargeInDetectedAt: ${pipeline.bargeIn.detectedAt ?? 'Unknown'}`,

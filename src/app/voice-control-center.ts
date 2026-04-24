@@ -49,6 +49,9 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
     runtimeConfig.foregroundLlmProvider === runtimeConfig.backgroundLlmProvider
       ? runtimeConfig.foregroundLlmProvider
       : `${runtimeConfig.foregroundLlmProvider} / ${runtimeConfig.backgroundLlmProvider}`;
+  const llmHealthUrl = runtimeConfig.foregroundLlmProvider === 'olmx-foreground'
+    ? `${runtimeConfig.olmx.baseUrl.replace(/\/+$/u, '')}/v1/models`
+    : `${runtimeConfig.ollama.baseUrl.replace(/\/+$/u, '')}/api/tags`;
   const wakeWordLabel = runtimeConfig.voice.porcupine.url === undefined
     ? 'disabled'
     : 'openwakeword';
@@ -67,7 +70,7 @@ export async function startVoiceControlCenter(): Promise<VoiceControlCenterRunti
       ollama: {
         label: llmModelLabel,
         details: `LLM · ${llmProviderLabel}`,
-        url: `${runtimeConfig.ollama.baseUrl.replace(/\/+$/u, '')}/api/tags`,
+        url: llmHealthUrl,
       },
       stt: {
         label: voiceGateway.manager.sttProviderName,
