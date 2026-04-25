@@ -137,3 +137,96 @@
     cursor: pointer;
   }
 }
+
+/* ── Sonny home design system ───────────────────────── */
+.sonny-shell,
+.sonny-shell *,
+.sonny-shell *::before,
+.sonny-shell *::after {
+  box-sizing: border-box;
+}
+
+.sonny-shell {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #0c0c0e;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+@keyframes sonny-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sonny-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes sonny-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes sonny-subtle-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+@keyframes sonny-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sonny-saved-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Custom scrollbar inside the dark shell */
+.sonny-shell *::-webkit-scrollbar {
+  width: 4px;
+}
+.sonny-shell *::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sonny-shell *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+
+.sonny-shell input::placeholder {
+  color: rgba(255, 255, 255, 0.2);
+}
+.sonny-shell input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+}

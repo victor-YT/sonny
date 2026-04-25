@@ -60,6 +60,12 @@ interface PlayerInvocation {
   stdin?: 'pipe' | 'ignore';
 }
 
+interface PlayerExitResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error;
+}
+
 export class Speaker {
   private readonly audioQueue: StreamingAudioQueue;
   private readonly playerCommand: string | undefined;
@@ -75,6 +81,7 @@ export class Speaker {
   private processing = false;
   private state: SpeakerState = 'idle';
   private currentProcess: ChildProcess | undefined;
+  private currentStreamingExit: Promise<PlayerExitResult> | undefined;
   private currentTempDir: string | undefined;
   private currentItem: PlaybackItem | undefined;
   private currentStreamingItemId: string | undefined;
@@ -145,6 +152,7 @@ export class Speaker {
 
     this.currentItem = undefined;
     this.currentProcess = undefined;
+    this.currentStreamingExit = undefined;
     this.processing = false;
     this.stopping = false;
     this.setState('idle');
@@ -166,6 +174,7 @@ export class Speaker {
 
     this.currentItem = undefined;
     this.currentProcess = undefined;
+    this.currentStreamingExit = undefined;
     this.stopping = false;
 
     if (!this.processing) {
@@ -413,34 +422,29 @@ export class Speaker {
     metadata: StreamingAudioQueueItemMetadata | undefined,
   ): Promise<void> {
     const child = this.currentProcess;
+    const exitPromise = this.currentStreamingExit;
 
     if (child === undefined) {
       return;
     }
 
-    await new Promise<void>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => {
-        if (this.stopping && signal === 'SIGTERM') {
-          resolve();
-          return;
-        }
-
-        if (code === 0) {
-          resolve();
-          return;
-        }
-
-        reject(
-          new Error(
-            `${child.spawnfile ?? 'player'} exited with code ${code ?? 'unknown'} and signal ${signal ?? 'none'}`,
-          ),
-        );
-      });
-      child.stdin?.end();
-    });
+    if (
+      child.stdin !== null &&
+      child.stdin !== undefined &&
+      !child.stdin.destroyed &&
+      !child.stdin.writableEnded
+    ) {
+      child.stdin.end();
+    }
+    this.assertPlayerExitSucceeded(
+      child,
+      exitPromise === undefined
+        ? await this.waitForPlayerExit(child)
+        : await exitPromise,
+    );
 
     this.currentProcess = undefined;
+    this.currentStreamingExit = undefined;
     this.currentItem = undefined;
     this.emit({
       type: 'playback_completed',
@@ -461,6 +465,7 @@ export class Speaker {
         });
 
         this.currentProcess = child;
+        this.currentStreamingExit = this.waitForPlayerExit(child);
         this.currentItem = item;
         this.lastPlaybackMode = 'streaming-stdin';
         this.lastPlayerCommand = invocation.command;
@@ -548,6 +553,61 @@ export class Speaker {
     } finally {
       this.currentProcess = undefined;
     }
+  }
+
+  private async waitForPlayerExit(child: ChildProcess): Promise<PlayerExitResult> {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return {
+        code: child.exitCode,
+        signal: child.signalCode,
+      };
+    }
+
+    return new Promise<PlayerExitResult>((resolve) => {
+      const cleanup = (): void => {
+        child.removeListener('error', onError);
+        child.removeListener('exit', onExit);
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        resolve({
+          code: child.exitCode,
+          signal: child.signalCode,
+          error,
+        });
+      };
+      const onExit = (
+        code: number | null,
+        signal: NodeJS.Signals | null,
+      ): void => {
+        cleanup();
+        resolve({ code, signal });
+      };
+
+      child.once('error', onError);
+      child.once('exit', onExit);
+    });
+  }
+
+  private assertPlayerExitSucceeded(
+    child: ChildProcess,
+    result: PlayerExitResult,
+  ): void {
+    if (result.error !== undefined) {
+      throw result.error;
+    }
+
+    if (this.stopping && result.signal === 'SIGTERM') {
+      return;
+    }
+
+    if (result.code === 0) {
+      return;
+    }
+
+    throw new Error(
+      `${child.spawnfile ?? 'player'} exited with code ${result.code ?? 'unknown'} and signal ${result.signal ?? 'none'}`,
+    );
   }
 
   private resolvePlayerInvocations(audioPath: string): PlayerInvocation[] {

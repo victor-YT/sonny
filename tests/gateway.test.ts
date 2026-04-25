@@ -165,6 +165,23 @@ test('Gateway.streamChat sends a message through prompt-building, streaming, and
     const systemPrompt = fixture.llmProvider.calls[0]?.options?.systemPrompt ?? '';
 
     assert.match(systemPrompt, /You are Test Sonny\./u);
+    assert.match(systemPrompt, /Voice runtime context:/u);
+    assert.match(
+      systemPrompt,
+      /The user is speaking aloud, but you receive their speech as an STT transcript\./u,
+    );
+    assert.match(
+      systemPrompt,
+      /Treat each user message as the words you heard from the user\./u,
+    );
+    assert.match(
+      systemPrompt,
+      /When the user asks whether you can hear them, answer yes if their transcript is present\./u,
+    );
+    assert.match(
+      systemPrompt,
+      /Do not say you cannot hear audio, cannot access the microphone, or only see text\./u,
+    );
     assert.match(systemPrompt, /Relevant memory context:/u);
     assert.match(
       systemPrompt,

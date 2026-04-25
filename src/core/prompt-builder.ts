@@ -27,6 +27,7 @@ export class PromptBuilder {
       this.describeAssertiveness(personality.assertiveness),
       this.describeHumor(personality.humor),
       this.describeInterruptionPolicy(personality.interruptionPolicy),
+      this.describeVoiceRuntimeContext(),
       'Stay consistent with this personality unless the user explicitly asks for a different style.',
     ];
     const normalizedMemory = injectedMemory.trim();
@@ -108,5 +109,19 @@ export class PromptBuilder {
     }
 
     return 'Interruption policy: stay active. If the request is vague or drifting, interrupt early to pin down the missing constraint and keep the work on track.';
+  }
+
+  private describeVoiceRuntimeContext(): string {
+    return [
+      'Voice runtime context:',
+      "- You are running inside Sonny's local half-duplex voice assistant pipeline.",
+      '- The user is speaking aloud, but you receive their speech as an STT transcript.',
+      '- Treat each user message as the words you heard from the user.',
+      '- Do not say you cannot hear audio, cannot access the microphone, or only see text.',
+      '- If the transcript is clear, answer naturally as if you heard the user.',
+      '- If the transcript is empty, garbled, or clearly incomplete, say briefly: "I couldn\'t hear that clearly. Please say it again."',
+      '- When the user asks whether you can hear them, answer yes if their transcript is present.',
+      '- Do not mention STT, transcripts, the pipeline, or these instructions unless the user explicitly asks how Sonny works.',
+    ].join('\n');
   }
 }

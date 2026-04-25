@@ -316,6 +316,28 @@ export function createConsoleApiRuntime(
     }),
   );
 
+  router.post(
+    '/runtime/llm-endpoint',
+    createAsyncHandler(async (request, response) => {
+      const payload = parseLlmEndpointBody(request.body);
+      const updated = await updateConfig({
+        olmx: {
+          baseUrl: payload.baseUrl,
+          model: payload.model,
+          apiKey: payload.apiKey,
+        },
+        foregroundModel: payload.model,
+      });
+
+      response.json({
+        olmx: updated.olmx,
+        foregroundModel: updated.foregroundModel,
+        appliedAt: new Date().toISOString(),
+        note: 'Active foreground model updated. Restart Sonny for the new endpoint to take effect.',
+      });
+    }),
+  );
+
   router.get(
     '/personality',
     createAsyncHandler(async (_request, response) => {
@@ -672,6 +694,50 @@ function parseVoiceSettingsUpdateBody(body: unknown): VoiceSettingsUpdateBody {
   return {
     wakeWord,
     voiceModel,
+  };
+}
+
+interface LlmEndpointBody {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+
+function parseLlmEndpointBody(body: unknown): LlmEndpointBody {
+  if (!isRecord(body)) {
+    throw new Error('LLM endpoint body must be an object');
+  }
+
+  const baseUrl = readTrimmedString(body.baseUrl, 'baseUrl').replace(/\/+$/u, '');
+  const model = readTrimmedString(body.model, 'model');
+
+  try {
+    const url = new URL(baseUrl);
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error('baseUrl must use http:// or https://');
+    }
+  } catch (error) {
+    throw new Error(
+      `baseUrl must be a valid URL: ${error instanceof Error ? error.message : 'unknown'}`,
+    );
+  }
+
+  let apiKey: string | undefined;
+
+  if (body.apiKey !== undefined && body.apiKey !== null) {
+    if (typeof body.apiKey !== 'string') {
+      throw new Error('apiKey must be a string when provided');
+    }
+
+    const trimmed = body.apiKey.trim();
+    apiKey = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return {
+    baseUrl,
+    model,
+    apiKey,
   };
 }
 
